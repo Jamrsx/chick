@@ -253,6 +253,11 @@ function AttendanceAdmin() {
       return record.dailyEarningsApi ?? 0;
     }
     
+    // If working 12 hours (standard 9 AM to 9 PM shift), use full daily rate
+    if (Math.abs(totalHours - 12) < 0.1) {
+      return dailyRate;
+    }
+    
     let earnings = 0;
     if (totalHours <= 8) {
       earnings = (totalHours / 8) * dailyRate;
