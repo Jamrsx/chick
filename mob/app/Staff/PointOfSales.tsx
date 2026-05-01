@@ -648,13 +648,13 @@ export default function POSScreen() {
                       </View>
 
                       {/* TOTAL */}
-                      <View className="bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-xl">
+                      <View className="bg-green-500 p-4 rounded-xl">
                         <View className="flex-row justify-between items-center">
                           <View>
                             <Text className="text-white/90 text-xs font-semibold uppercase tracking-wider mb-1">Total Amount</Text>
                             <Text className="text-white font-bold text-2xl">₱{total}</Text>
                           </View>
-                          <View className="bg-white/20 p-3 rounded-xl">
+                          <View className="bg-green-600 p-3 rounded-xl">
                             <Icon name="payments" size={24} color="white" />
                           </View>
                         </View>
@@ -709,7 +709,7 @@ export default function POSScreen() {
 
                       {/* CHANGE DISPLAY */}
                       {cash && Number(cash) >= total && (
-                        <View className="bg-gradient-to-r from-green-500 to-green-600 p-4 rounded-xl mt-4">
+                        <View className="bg-green-500 p-4 rounded-xl mt-4">
                           <View className="flex-row justify-between items-center">
                             <View className="flex-row items-center">
                               <Icon name="check-circle" size={20} color="white" />
@@ -739,7 +739,7 @@ export default function POSScreen() {
                       <Animated.View style={{ transform: [{ scale: buttonScaleAnim }] }}>
                         <TouchableOpacity 
                           onPress={handleCheckout}
-                          className="bg-gradient-to-r from-green-500 to-green-600 py-4 mt-5 rounded-xl items-center shadow-lg"
+                          className="bg-green-500 py-4 mt-5 rounded-xl items-center shadow-lg"
                           activeOpacity={0.8}
                         >
                           <View className="flex-row items-center">
@@ -751,7 +751,7 @@ export default function POSScreen() {
 
                       <TouchableOpacity 
                         onPress={handleCancelOrder}
-                        className="bg-gradient-to-r from-red-500 to-red-600 py-4 mt-3 rounded-xl items-center shadow-lg"
+                        className="bg-red-500 py-4 mt-3 rounded-xl items-center shadow-lg"
                         activeOpacity={0.8}
                       >
                         <View className="flex-row items-center">
