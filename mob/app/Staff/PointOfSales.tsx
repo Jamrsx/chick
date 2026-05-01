@@ -19,6 +19,7 @@ import {
     View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Icon from 'react-native-vector-icons/MaterialIcons';
 import { api } from '../../config/api';
 
 const { height: screenHeight } = Dimensions.get('window');
@@ -49,7 +50,7 @@ type StockItem = {
   minStock: number;
   status: StockStatus;
   product_stocks?: StockProductStock[];
-  icon?: string;
+  icon: string;
   description?: string;
   popular?: boolean;
 };
@@ -93,7 +94,7 @@ export default function POSScreen() {
           price: Number(item.price || 0),
           minStock: 1,
           status: quantity <= 0 ? 'Out of Stock' : 'In Stock',
-          icon: item.category === 'Liempo' ? '🥩' : '🍗',
+          icon: item.category === 'Liempo' ? 'set_meal' : 'restaurant',
           description: `Stock: ${quantity}`,
           popular: quantity > 20,
         };
@@ -402,7 +403,7 @@ export default function POSScreen() {
       console.log('[POS CHECKOUT] Alert message:', alertMessage);
       
       Alert.alert(
-        '✅ Order Complete!',
+        'Order Complete!',
         alertMessage,
         [{ text: 'New Order' }]
       );
@@ -435,7 +436,9 @@ export default function POSScreen() {
     <View className="flex-row justify-between items-center border-b border-gray-100 py-3">
       <View className="flex-2">
         <View className="flex-row items-center">
-          <Text className="text-xl mr-2">{item.icon}</Text>
+          <View className="bg-red-100 p-2 rounded-full mr-2">
+            <Icon name={item.icon} size={20} color="#DC2626" />
+          </View>
           <View>
             <Text className="font-medium text-sm">{item.name}</Text>
             <Text className="text-gray-500 text-xs">₱{item.price} each</Text>
@@ -447,7 +450,7 @@ export default function POSScreen() {
           onPress={() => updateQuantity(item.id, -1)}
           className="bg-red-100 w-8 h-8 rounded-full items-center justify-center"
         >
-          <Text className="text-red-600 font-bold text-lg">-</Text>
+          <Icon name="remove" size={16} color="#DC2626" />
         </TouchableOpacity>
         <Text className="font-semibold text-base min-w-[30px] text-center">
           {item.quantity}
@@ -456,13 +459,13 @@ export default function POSScreen() {
           onPress={() => updateQuantity(item.id, 1)}
           className="bg-green-100 w-8 h-8 rounded-full items-center justify-center"
         >
-          <Text className="text-green-600 font-bold text-lg">+</Text>
+          <Icon name="add" size={16} color="#10B981" />
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => removeFromCart(item.id, item.name)}
           className="ml-2"
         >
-          <Text className="text-red-500 text-xl">🗑️</Text>
+          <Icon name="delete" size={20} color="#DC2626" />
         </TouchableOpacity>
       </View>
     </View>
@@ -493,11 +496,14 @@ export default function POSScreen() {
         
         <Animated.View className="flex-1" style={{ opacity: fadeAnim }}>
           {/* HEADER - Fixed */}
-          <View className="bg-red-600 pt-12 pb-5 px-5 rounded-b-3xl shadow-lg">
-            <Text className="text-3xl font-bold text-center text-white">
-              🍗 New Moon Lechon
-            </Text>
-            <Text className="text-center text-red-200 text-sm mt-1">
+          <View className="bg-red-600 pt-12 pb-10 px-6 rounded-b-3xl shadow-lg">
+            <View className="flex-row items-center justify-center mb-2">
+              <Icon name="restaurant" size={32} color="white" />
+              <Text className="text-3xl font-bold text-white ml-2">
+                New Moon Lechon
+              </Text>
+            </View>
+            <Text className="text-center text-red-200 text-sm font-medium">
               Point of Sales System
             </Text>
           </View>
@@ -515,9 +521,9 @@ export default function POSScreen() {
               contentContainerStyle={{ flexGrow: 1, minHeight: screenHeight, paddingBottom: Math.max(120, insets.bottom + 100) }}
               keyboardShouldPersistTaps="handled"
             >
-              <View className="p-4">
+              <View className="p-5">
                 {/* CATEGORY FILTER - Horizontal ScrollView */}
-                <View className="mb-4">
+                <View className="mb-6">
                   <ScrollView 
                     ref={categoryScrollRef}
                     horizontal 
@@ -529,15 +535,15 @@ export default function POSScreen() {
                       <TouchableOpacity
                         key={category}
                         onPress={() => setSelectedCategory(category)}
-                        className={`px-5 py-2 rounded-full mr-2 shadow-sm ${
+                        className={`px-5 py-3 rounded-xl mr-3 shadow-sm ${
                           selectedCategory === category ? 'bg-red-600' : 'bg-white'
                         }`}
                       >
-                        <Text className={`font-semibold ${
+                        <Text className={`font-semibold text-sm ${
                           selectedCategory === category ? 'text-white' : 'text-gray-700'
                         }`}>
-                          {category === 'Lechon Manok' ? '🍗 Lechon Manok' : 
-                           category === 'Liempo' ? '🥩 Liempo' : '📋 All Items'}
+                          {category === 'Lechon Manok' ? 'Lechon Manok' : 
+                           category === 'Liempo' ? 'Liempo' : 'All Items'}
                         </Text>
                       </TouchableOpacity>
                     ))}
@@ -545,10 +551,13 @@ export default function POSScreen() {
                 </View>
 
                 {/* MENU GRID - Shows all products from Dashboard */}
-                <View className="bg-white rounded-2xl p-4 mb-4 shadow-sm">
-                  <Text className="font-bold text-xl mb-3 text-gray-800">
-                    📋 Menu
-                  </Text>
+                <View className="bg-white rounded-2xl p-5 mb-4 shadow-sm">
+                  <View className="flex-row items-center mb-5">
+                    <Icon name="restaurant-menu" size={24} color="#DC2626" />
+                    <Text className="font-bold text-xl ml-2 text-gray-800">
+                      Menu
+                    </Text>
+                  </View>
                   <FlatList
                     data={filteredProducts}
                     keyExtractor={(item) => item.id}
@@ -558,15 +567,16 @@ export default function POSScreen() {
                     renderItem={({ item }) => (
                       <TouchableOpacity
                         onPress={() => addToCart(item)}
-                        className={`w-[48%] p-4 mb-3 rounded-2xl items-center shadow-sm ${
+                        className={`w-[48%] p-4 mb-4 rounded-2xl items-center shadow-sm ${
                           item.quantity <= 0 ? 'bg-gray-100 opacity-50' : 'bg-amber-50'
                         }`}
                         activeOpacity={item.quantity <= 0 ? 1 : 0.7}
                         disabled={item.quantity <= 0}
                       >
                         {item.popular && item.quantity > 0 && (
-                          <View className="absolute top-2 right-2 bg-orange-500 px-2 py-1 rounded-full">
-                            <Text className="text-white text-[10px] font-bold">🔥 BESTSELLER</Text>
+                          <View className="absolute top-2 right-2 bg-orange-500 px-2 py-1 rounded-full flex-row items-center">
+                            <Icon name="local-fire-department" size={10} color="white" />
+                            <Text className="text-white text-[10px] font-bold ml-1">BESTSELLER</Text>
                           </View>
                         )}
                         {item.quantity <= 0 && (
@@ -574,12 +584,17 @@ export default function POSScreen() {
                             <Text className="text-white text-[10px] font-bold">OUT OF STOCK</Text>
                           </View>
                         )}
-                        <Text className="text-5xl mb-2">{item.icon}</Text>
-                        <Text className="font-bold text-center text-base text-gray-800">{item.name}</Text>
+                        <View className="bg-red-100 p-3 rounded-full mb-3">
+                          <Icon name={item.icon} size={32} color="#DC2626" />
+                        </View>
+                        <Text className="font-bold text-center text-base text-gray-800 mb-1">{item.name}</Text>
                         <Text className="text-gray-500 text-xs text-center mb-2">{item.description}</Text>
-                        <Text className="text-green-600 font-bold mt-1 text-xl">₱{item.price}</Text>
+                        <Text className="text-green-600 font-bold text-xl">₱{item.price}</Text>
                         {item.quantity <= 10 && item.quantity > 0 && (
-                          <Text className="text-orange-500 text-xs mt-1">⚠️ Only {item.quantity} left!</Text>
+                          <View className="flex-row items-center mt-2">
+                            <Icon name="warning" size={12} color="#F59E0B" />
+                            <Text className="text-orange-500 text-xs ml-1">Only {item.quantity} left!</Text>
+                          </View>
                         )}
                       </TouchableOpacity>
                     )}
@@ -587,19 +602,26 @@ export default function POSScreen() {
                 </View>
 
                 {/* ORDER SUMMARY */}
-                <View className="bg-white rounded-2xl p-4 mb-4 shadow-sm">
-                  <View className="flex-row justify-between items-center mb-3">
-                    <Text className="font-bold text-xl text-gray-800">
-                      🧾 Order Summary
-                    </Text>
-                    <Text className="text-gray-500 text-xs">
-                      {cart.length} {cart.length === 1 ? 'item' : 'items'}
-                    </Text>
+                <View className="bg-white rounded-2xl p-5 mb-4 shadow-sm">
+                  <View className="flex-row justify-between items-center mb-5">
+                    <View className="flex-row items-center">
+                      <Icon name="receipt-long" size={24} color="#DC2626" />
+                      <Text className="font-bold text-xl ml-2 text-gray-800">
+                        Order Summary
+                      </Text>
+                    </View>
+                    <View className="bg-gray-100 px-3 py-1 rounded-full">
+                      <Text className="text-gray-600 text-xs font-semibold">
+                        {cart.length} {cart.length === 1 ? 'item' : 'items'}
+                      </Text>
+                    </View>
                   </View>
 
                   {cart.length === 0 ? (
                     <View className="py-10 items-center">
-                      <Text className="text-5xl mb-2">🛒</Text>
+                      <View className="bg-gray-100 p-4 rounded-full mb-3">
+                        <Icon name="shopping-cart" size={40} color="#9CA3AF" />
+                      </View>
                       <Text className="text-gray-400 text-center">Your cart is empty</Text>
                       <Text className="text-gray-400 text-xs text-center mt-1">Tap on items to add</Text>
                     </View>
@@ -613,10 +635,10 @@ export default function POSScreen() {
                       ))}
 
                       {/* TOTAL */}
-                      <View className="bg-green-50 p-4 rounded-xl mt-4">
+                      <View className="bg-green-50 p-4 rounded-xl mt-5 border border-green-200">
                         <View className="flex-row justify-between items-center">
-                          <Text className="font-bold text-base">Total Amount</Text>
-                          <Text className="font-bold text-xl text-green-700">₱{total}</Text>
+                          <Text className="font-bold text-base text-gray-700">Total Amount</Text>
+                          <Text className="font-bold text-2xl text-green-700">₱{total}</Text>
                         </View>
                       </View>
                     </>
@@ -624,14 +646,17 @@ export default function POSScreen() {
 
                   {/* CASH INPUT with Quick Add */}
                   {cart.length > 0 && (
-                    <View className="mt-4">
-                      <Text className="font-semibold mb-2 text-gray-700">💰 Cash Amount</Text>
+                    <View className="mt-5">
+                      <View className="flex-row items-center mb-3">
+                        <Icon name="payments" size={20} color="#DC2626" />
+                        <Text className="font-semibold ml-2 text-gray-700">Cash Amount</Text>
+                      </View>
                       
                       {/* Quick Add Buttons - Horizontal ScrollView */}
                       <ScrollView 
                         horizontal 
                         showsHorizontalScrollIndicator={false}
-                        className="mb-3"
+                        className="mb-4"
                         nestedScrollEnabled={true}
                       >
                         <View className="flex-row">
@@ -639,9 +664,9 @@ export default function POSScreen() {
                             <TouchableOpacity
                               key={amount}
                               onPress={() => setCash(amount.toString())}
-                              className="bg-gray-100 px-4 py-2 rounded-full mr-2"
+                              className="bg-gray-100 px-5 py-3 rounded-xl mr-3 shadow-sm"
                             >
-                              <Text className="text-gray-700 font-medium">₱{amount}</Text>
+                              <Text className="text-gray-700 font-semibold">₱{amount}</Text>
                             </TouchableOpacity>
                           ))}
                         </View>
@@ -649,7 +674,7 @@ export default function POSScreen() {
 
                       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
                         <TextInput
-                          className="border border-gray-300 p-3 rounded-xl text-base bg-white"
+                          className="border border-gray-300 p-4 rounded-xl text-base bg-white shadow-sm"
                           placeholder="Enter cash amount"
                           keyboardType="numeric"
                           value={cash.toString()}
@@ -661,19 +686,25 @@ export default function POSScreen() {
 
                       {/* CHANGE DISPLAY */}
                       {cash && Number(cash) >= total && (
-                        <View className="bg-green-50 p-3 rounded-xl mt-3 border border-green-200">
+                        <View className="bg-green-50 p-4 rounded-xl mt-4 border border-green-200">
                           <View className="flex-row justify-between items-center">
-                            <Text className="font-bold text-gray-700">Change</Text>
+                            <View className="flex-row items-center">
+                              <Icon name="check-circle" size={20} color="#10B981" />
+                              <Text className="font-bold text-gray-700 ml-2">Change</Text>
+                            </View>
                             <Text className="font-bold text-2xl text-green-600">₱{change}</Text>
                           </View>
                         </View>
                       )}
                       
                       {cash && Number(cash) < total && Number(cash) > 0 && (
-                        <View className="bg-red-50 p-3 rounded-xl mt-3">
-                          <Text className="text-red-600 text-center">
-                            ⚠️ Insufficient: Need ₱{total - Number(cash)} more
-                          </Text>
+                        <View className="bg-red-50 p-4 rounded-xl mt-4 border border-red-200">
+                          <View className="flex-row items-center justify-center">
+                            <Icon name="error-outline" size={20} color="#DC2626" />
+                            <Text className="text-red-600 text-center ml-2 font-medium">
+                              Insufficient: Need ₱{total - Number(cash)} more
+                            </Text>
+                          </View>
                         </View>
                       )}
                     </View>
@@ -685,19 +716,25 @@ export default function POSScreen() {
                       <Animated.View style={{ transform: [{ scale: buttonScaleAnim }] }}>
                         <TouchableOpacity 
                           onPress={handleCheckout}
-                          className="bg-green-600 py-4 mt-4 rounded-xl items-center shadow-md"
+                          className="bg-green-600 py-4 mt-5 rounded-xl items-center shadow-md"
                           activeOpacity={0.8}
                         >
-                          <Text className="text-white font-bold text-base">✅ Checkout</Text>
+                          <View className="flex-row items-center">
+                            <Icon name="check-circle" size={20} color="white" />
+                            <Text className="text-white font-bold text-base ml-2">Checkout</Text>
+                          </View>
                         </TouchableOpacity>
                       </Animated.View>
 
                       <TouchableOpacity 
                         onPress={handleCancelOrder}
-                        className="bg-red-600 py-4 mt-2 rounded-xl items-center shadow-md"
+                        className="bg-red-600 py-4 mt-3 rounded-xl items-center shadow-md"
                         activeOpacity={0.8}
                       >
-                        <Text className="text-white font-bold text-base">❌ Cancel Order</Text>
+                        <View className="flex-row items-center">
+                          <Icon name="cancel" size={20} color="white" />
+                          <Text className="text-white font-bold text-base ml-2">Cancel Order</Text>
+                        </View>
                       </TouchableOpacity>
                     </>
                   )}
