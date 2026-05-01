@@ -4,10 +4,12 @@ import {
   SearchOutlined,
   PrinterOutlined,
   EditOutlined,
-  UserOutlined
+  UserOutlined,
+  ReloadOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../config/api";
+import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 const { Option } = Select;
 
@@ -103,9 +105,23 @@ function AttendanceAdmin() {
   };
 
   // Load attendance data
-  async function loadAttendanceData() {
+  async function loadAttendanceData(forceRefresh = false) {
     setIsLoading(true);
     try {
+      // Use date-specific cache key
+      const cacheKey = `attendance_${selectedDate}`;
+      
+      // Try to get data from cache first
+      const cachedData = forceRefresh ? null : getCache(cacheKey);
+      
+      // If data is cached and valid, use it
+      if (cachedData) {
+        setAttendanceData(cachedData);
+        setIsLoading(false);
+        return;
+      }
+
+      // Otherwise, fetch from backend
       const { data } = await api.get("/attendance/payroll/report", {
         params: { date: selectedDate },
       });
@@ -160,6 +176,9 @@ function AttendanceAdmin() {
       });
       
       setAttendanceData(mapped);
+      
+      // Cache the fetched data (5 minutes TTL)
+      setCache(cacheKey, mapped);
     } catch (error) {
       console.error("Error loading attendance:", error);
       message.error("Failed to load attendance payroll from backend.");
@@ -558,6 +577,10 @@ function AttendanceAdmin() {
       }
 
       message.success(`Time In recorded for ${staffName}`);
+      
+      // Invalidate cache to reflect the time-in
+      invalidateCache(`attendance_${selectedDate}`);
+      
       await loadAttendanceData();
     } catch (error) {
       console.error('Time In error:', error);
@@ -587,6 +610,10 @@ function AttendanceAdmin() {
 
       console.log('Time out response:', response.data);
       message.success(`Time Out recorded for ${staffName}`);
+      
+      // Invalidate cache to reflect the time-out
+      invalidateCache(`attendance_${selectedDate}`);
+      
       await loadAttendanceData();
     } catch (error) {
       console.error('Time Out error:', error);
@@ -691,14 +718,22 @@ function AttendanceAdmin() {
                 </div>
               </div>
             </div>
-            <Button 
-              type="primary" 
-              icon={<PrinterOutlined />}
-              onClick={() => setIsPrintModalVisible(true)}
-              className="bg-blue-600"
-            >
-              Print Report
-            </Button>
+            <div className="flex gap-3">
+              <Button 
+                icon={<ReloadOutlined />}
+                onClick={() => loadAttendanceData(true)}
+              >
+                Refresh
+              </Button>
+              <Button 
+                type="primary" 
+                icon={<PrinterOutlined />}
+                onClick={() => setIsPrintModalVisible(true)}
+                className="bg-blue-600"
+              >
+                Print Report
+              </Button>
+            </div>
           </div>
         </div>
 

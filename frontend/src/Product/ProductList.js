@@ -7,11 +7,13 @@ import {
   BoxPlotOutlined,
   StockOutlined,
   BranchesOutlined,
-  SearchOutlined
+  SearchOutlined,
+  ReloadOutlined
 } from "@ant-design/icons";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPesoSign } from '@fortawesome/free-solid-svg-icons';
 import { api } from "../config/api";
+import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 const { Option } = Select;
 
@@ -28,15 +30,36 @@ function ProductList() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [form] = Form.useForm();
 
-  const loadData = async () => {
+  const loadData = async (forceRefresh = false) => {
     setLoading(true);
     try {
+      // Try to get data from cache first
+      const cachedProducts = forceRefresh ? null : getCache('products');
+      const cachedBranches = forceRefresh ? null : getCache('branches');
+
+      // If all data is cached and valid, use it
+      if (cachedProducts && cachedBranches) {
+        setProducts(cachedProducts);
+        setBranches(cachedBranches);
+        setLoading(false);
+        return;
+      }
+
+      // Otherwise, fetch from backend
       const [productsRes, branchesRes] = await Promise.all([
-        api.get("/products"),
-        api.get("/branches"),
+        cachedProducts ? Promise.resolve({ data: cachedProducts }) : api.get("/products"),
+        cachedBranches ? Promise.resolve({ data: cachedBranches }) : api.get("/branches"),
       ]);
-      setProducts(productsRes.data || []);
-      setBranches(branchesRes.data || []);
+
+      const productsData = productsRes.data || [];
+      const branchesData = branchesRes.data || [];
+
+      setProducts(productsData);
+      setBranches(branchesData);
+
+      // Cache the fetched data (5 minutes TTL)
+      setCache('products', productsData);
+      setCache('branches', branchesData);
     } catch (error) {
       message.error("Failed to load products from backend.");
       setProducts([]);
@@ -68,6 +91,10 @@ function ProductList() {
     try {
       const { data } = await api.post("/products", values);
       setProducts([data, ...products]);
+      
+      // Invalidate cache to reflect the new product
+      invalidateCache('products');
+      
       message.success(`${values.name} has been created successfully.`);
       setIsCreateModalVisible(false);
       form.resetFields();
@@ -98,6 +125,10 @@ function ProductList() {
       setSelectedProduct(null);
       setSelectedBranch(null);
       setStockQuantity("");
+      
+      // Invalidate cache to reflect the stock changes
+      invalidateCache('products');
+      
       loadData();
     } catch (error) {
       message.error("Failed to restock product");
@@ -115,6 +146,10 @@ function ProductList() {
         api.delete(`/products/${product.id}`)
           .then(() => {
             setProducts(products.filter(p => p.id !== product.id));
+            
+            // Invalidate cache to reflect the deletion
+            invalidateCache('products');
+            
             message.success(`${product.name} has been deleted`);
           })
           .catch(() => message.error("Failed to delete product"));
@@ -234,15 +269,24 @@ function ProductList() {
                   </div>
                 </div>
               </div>
-              <Button 
-                type="primary" 
-                icon={<PlusOutlined />}
-                onClick={() => setIsCreateModalVisible(true)}
-                className="bg-green-600"
-                size="middle"
-              >
-                Create New Product
-              </Button>
+              <div className="flex gap-3">
+                <Button 
+                  icon={<ReloadOutlined />}
+                  onClick={() => loadData(true)}
+                  size="middle"
+                >
+                  Refresh
+                </Button>
+                <Button 
+                  type="primary" 
+                  icon={<PlusOutlined />}
+                  onClick={() => setIsCreateModalVisible(true)}
+                  className="bg-green-600"
+                  size="middle"
+                >
+                  Create New Product
+                </Button>
+              </div>
             </div>
           </div>
 

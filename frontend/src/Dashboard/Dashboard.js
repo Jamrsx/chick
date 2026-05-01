@@ -6,11 +6,13 @@ import {
   ShopOutlined, 
   ShoppingOutlined, 
   TeamOutlined, 
-  EyeOutlined
+  EyeOutlined,
+  ReloadOutlined
 } from "@ant-design/icons";
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faPesoSign } from '@fortawesome/free-solid-svg-icons';
 import { api } from "../config/api";
+import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -40,15 +42,33 @@ function Dashboard() {
     return () => clearInterval(timer);
   }, []);
 
-  const loadDashboardData = useCallback(async () => {
+  const loadDashboardData = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     setLoadError("");
+    
     try {
+      // Try to get data from cache first
+      const cachedBranches = forceRefresh ? null : getCache('branches');
+      const cachedStaff = forceRefresh ? null : getCache('staff');
+      const cachedSales = forceRefresh ? null : getCache('sales');
+      const cachedProducts = forceRefresh ? null : getCache('products');
+
+      // If all data is cached and valid, use it
+      if (cachedBranches && cachedStaff && cachedSales && cachedProducts) {
+        setBranches(cachedBranches);
+        setStaff(cachedStaff);
+        setSales(cachedSales);
+        setProducts(cachedProducts);
+        setLoading(false);
+        return;
+      }
+
+      // Otherwise, fetch from backend
       const results = await Promise.allSettled([
-        api.get("/branches"),
-        api.get("/staff"),
-        api.get("/sales"),
-        api.get("/products"),
+        cachedBranches ? Promise.resolve({ data: cachedBranches }) : api.get("/branches"),
+        cachedStaff ? Promise.resolve({ data: cachedStaff }) : api.get("/staff"),
+        cachedSales ? Promise.resolve({ data: cachedSales }) : api.get("/sales"),
+        cachedProducts ? Promise.resolve({ data: cachedProducts }) : api.get("/products"),
       ]);
 
       const labels = ["GET /branches", "GET /staff", "GET /sales", "GET /products"];
@@ -97,10 +117,21 @@ function Dashboard() {
         };
       });
 
-      setBranches(branchesRes.data || []);
-      setStaff(staffRows);
-      setSales(salesRes.data || []);
-      setProducts(productsRes.data || []);
+      const branchesData = branchesRes.data || [];
+      const staffData = staffRows;
+      const salesData = salesRes.data || [];
+      const productsData = productsRes.data || [];
+
+      setBranches(branchesData);
+      setStaff(staffData);
+      setSales(salesData);
+      setProducts(productsData);
+
+      // Cache the fetched data (5 minutes TTL)
+      setCache('branches', branchesData);
+      setCache('staff', staffData);
+      setCache('sales', salesData);
+      setCache('products', productsData);
     } catch (err) {
       const msg = err?.message || "Failed to load dashboard data from backend.";
       setLoadError(msg);
@@ -189,6 +220,10 @@ function Dashboard() {
       setFormName("");
       setFormCode("");
       setIsModalOpen(false);
+      
+      // Invalidate cache to reflect the new branch
+      invalidateCache('branches');
+      
       message.success("Branch created successfully!");
     } catch (err) {
       const msg = err?.response?.data?.message || "Failed to create branch";
@@ -242,7 +277,14 @@ function Dashboard() {
           </div>
         )}
         {/* Add Branch Button */}
-        <div className="flex justify-end mb-6">
+        <div className="flex justify-end gap-3 mb-6">
+          <Button 
+            icon={<ReloadOutlined />}
+            onClick={() => loadDashboardData(true)}
+            size="large"
+          >
+            Refresh
+          </Button>
           <Button 
             type="primary" 
             icon={<PlusOutlined />}

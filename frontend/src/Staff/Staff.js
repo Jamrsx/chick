@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Tag, Modal, message, Avatar } from "antd";
+import { Tag, Modal, message, Avatar, Button } from "antd";
 import { 
   UserOutlined,
   PlusOutlined,
@@ -8,9 +8,11 @@ import {
   BankOutlined,
   TeamOutlined,
   EnvironmentOutlined,
-  KeyOutlined
+  KeyOutlined,
+  ReloadOutlined
 } from "@ant-design/icons";
 import { api } from "../config/api";
+import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 function Staff() {
   const [staff, setStaff] = useState([]);
@@ -42,9 +44,22 @@ function Staff() {
     branch_id: ''
   });
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (forceRefresh = false) => {
     setLoading(true);
     try {
+      // Try to get data from cache first
+      const cachedStaff = forceRefresh ? null : getCache('staff');
+      const cachedBranches = forceRefresh ? null : getCache('branches');
+      
+      // If both staff and branches are cached and valid, use them
+      if (cachedStaff && cachedBranches) {
+        setStaff(cachedStaff);
+        setBranches(cachedBranches);
+        setLoading(false);
+        return;
+      }
+
+      // Otherwise, fetch from backend
       const [staffRes, branchesRes] = await Promise.all([
         api.get("/staff"),
         api.get("/branches"),
@@ -74,6 +89,10 @@ function Staff() {
       });
 
       setStaff(mappedStaff);
+      
+      // Cache the fetched data
+      setCache('staff', mappedStaff);
+      setCache('branches', branchRows);
     } catch (error) {
       message.error("Failed to load staff data.");
     } finally {
@@ -116,6 +135,9 @@ function Staff() {
       });
       setShowAddModal(false);
 
+      // Invalidate cache to reflect the new staff member
+      invalidateCache('staff');
+      
       // Re-fetch so branchAssignments (saved in DB) shows immediately
       await loadData();
       message.success("Staff member added successfully");
@@ -170,6 +192,9 @@ function Staff() {
         branch_id: ''
       });
 
+      // Invalidate cache to reflect the staff update
+      invalidateCache('staff');
+      
       // Re-fetch so branch assignment reflects what backend saved
       await loadData();
       message.success("Staff member updated successfully");
@@ -193,6 +218,10 @@ function Staff() {
       await api.delete(`/staff/${selectedStaff}`);
       setShowDeleteModal(false);
       setSelectedStaff(null);
+      
+      // Invalidate cache to reflect the deletion
+      invalidateCache('staff');
+      
       await loadData();
       message.success("Staff member deleted successfully");
     } catch (error) {
@@ -233,13 +262,21 @@ function Staff() {
               <h1 className="text-2xl font-bold text-gray-800">Staff Management</h1>
               <p className="text-gray-500 mt-1">Manage your staff members and their branch assignments</p>
             </div>
-            <button
-              onClick={() => setShowAddModal(true)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
-            >
-              <PlusOutlined />
-              Add Staff
-            </button>
+            <div className="flex gap-3">
+              <Button 
+                icon={<ReloadOutlined />}
+                onClick={() => loadData(true)}
+              >
+                Refresh
+              </Button>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <PlusOutlined />
+                Add Staff
+              </button>
+            </div>
           </div>
         </div>
       </div>

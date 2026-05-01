@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Tag, Progress, DatePicker as AntDatePicker } from "antd";
+import { Tag, Progress, DatePicker as AntDatePicker, Button } from "antd";
 import { 
   CalendarOutlined, 
   CheckCircleOutlined, 
@@ -8,10 +8,12 @@ import {
   ShoppingCartOutlined,
   SearchOutlined,
   ClockCircleOutlined,
-  DollarOutlined
+  DollarOutlined,
+  ReloadOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../config/api";
+import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 
 
@@ -83,168 +85,212 @@ function EmployeeTracker() {
     return Math.max(0, completionBase - latePenalty);
   };
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError("");
-      try {
-        const results = await Promise.allSettled([
-          api.get("/staff"),
-          api.get("/attendance", { params: { date: selectedDate } }),
-          api.get("/sales", { params: { date: selectedDate } }),
-        ]);
+  const loadEmployeeData = async (forceRefresh = false) => {
+    setLoading(true);
+    setError("");
+    try {
+      // Use date-specific cache key
+      const cacheKey = `employee_tracker_${selectedDate}`;
+      
+      // Try to get data from cache first for instant rendering
+      const cachedData = forceRefresh ? null : getCache(cacheKey);
+      
+      // If data is cached and valid, render it instantly
+      if (cachedData) {
+        setAttendanceData(cachedData.attendanceData);
+        setStaffSalesData(cachedData.staffSalesData);
+        setPerformanceData(cachedData.performanceData);
+        setLoading(false);
+        
+        // Still fetch fresh data in background to update cache
+        fetchAndUpdateCache(cacheKey);
+        return;
+      }
 
-        const labels = ["GET /staff", "GET /attendance", "GET /sales"];
-        const rejectedIdx = results.findIndex((r) => r.status === "rejected");
-        if (rejectedIdx !== -1) {
-          const reason = results[rejectedIdx].reason;
-          const status = reason?.response?.status;
-          const backendMessage =
-            reason?.response?.data?.message ||
-            reason?.response?.data?.error ||
-            reason?.message;
+      // Otherwise, fetch from backend
+      await fetchAndUpdateCache(cacheKey);
+    } catch (e) {
+      setError(e?.message || "Failed to load employee tracker data from backend.");
+      setAttendanceData([]);
+      setStaffSalesData([]);
+      setPerformanceData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
-          const authHint =
-            status === 401 || status === 419
-              ? "Unauthorized. Please login again (token missing/expired)."
-              : "";
+  const fetchAndUpdateCache = async (cacheKey) => {
+    try {
+      const results = await Promise.allSettled([
+        api.get("/staff"),
+        api.get("/attendance", { params: { date: selectedDate } }),
+        api.get("/sales", { params: { date: selectedDate } }),
+      ]);
 
-          throw new Error(
-            `${labels[rejectedIdx]} failed` +
-              (status ? ` (HTTP ${status})` : "") +
-              (backendMessage ? `: ${backendMessage}` : "") +
-              (authHint ? `\n${authHint}` : "")
-          );
-        }
+      const labels = ["GET /staff", "GET /attendance", "GET /sales"];
+      const rejectedIdx = results.findIndex((r) => r.status === "rejected");
+      if (rejectedIdx !== -1) {
+        const reason = results[rejectedIdx].reason;
+        const status = reason?.response?.status;
+        const backendMessage =
+          reason?.response?.data?.message ||
+          reason?.response?.data?.error ||
+          reason?.message;
 
-        const staffRes = results[0].value;
-        const attendanceRes = results[1].value;
-        const salesRes = results[2].value;
+        const authHint =
+          status === 401 || status === 419
+            ? "Unauthorized. Please login again (token missing/expired)."
+            : "";
 
-        const staff = staffRes.data || [];
-        const staffById = new Map(staff.map((s) => [s.id, s]));
+        throw new Error(
+          `${labels[rejectedIdx]} failed` +
+            (status ? ` (HTTP ${status})` : "") +
+            (backendMessage ? `: ${backendMessage}` : "") +
+            (authHint ? `\n${authHint}` : "")
+        );
+      }
 
-        const attendance = (attendanceRes.data || []).map((a) => {
-          const staffUser = staffById.get(a.user_id) || a.user;
-          const name = safeName(staffUser);
-          const position = staffUser?.branchAssignments?.[0]?.position || "Staff";
-          const statusRaw = a.status || (a.is_late ? "late" : "present");
-          const status = statusRaw === "present" ? "Present" : statusRaw === "late" ? "Late" : toTitle(statusRaw);
+      const staffRes = results[0].value;
+      const attendanceRes = results[1].value;
+      const salesRes = results[2].value;
 
-          const tardiness =
-            a.is_late && (a.late_minutes || a.lateMinutes)
-              ? `${a.late_minutes || a.lateMinutes} min`
-              : a.is_late
-                ? "Late"
-                : "0 min";
+      const staff = staffRes.data || [];
+      const staffById = new Map(staff.map((s) => [s.id, s]));
 
-          return {
-            id: a.id,
-            user_id: a.user_id,
-            name,
-            position,
-            status,
-            hasTimeIn: Boolean(a.time_in),
-            hasTimeOut: Boolean(a.time_out),
-            lateMinutes: Number(a.late_minutes || a.lateMinutes || 0),
-            checkIn: formatTime(a.time_in),
-            time_out: formatTime(a.time_out),
-            tardiness: a.time_in ? tardiness : "-",
-          };
-        });
+      const attendance = (attendanceRes.data || []).map((a) => {
+        const staffUser = staffById.get(a.user_id) || a.user;
+        const name = safeName(staffUser);
+        const position = staffUser?.branchAssignments?.[0]?.position || "Staff";
+        const statusRaw = a.status || (a.is_late ? "late" : "present");
+        const status = statusRaw === "present" ? "Present" : statusRaw === "late" ? "Late" : toTitle(statusRaw);
 
-        // Sales aggregation per staff (POS checkout)
-        const sales = salesRes.data || [];
-        const byStaff = new Map();
+        const tardiness =
+          a.is_late && (a.late_minutes || a.lateMinutes)
+            ? `${a.late_minutes || a.lateMinutes} min`
+            : a.is_late
+              ? "Late"
+              : "0 min";
 
-        for (const sale of sales) {
-          const userId = sale.user_id || sale.user?.id;
-          const staffUser = staffById.get(userId) || sale.user;
-          const employee = safeName(staffUser);
+        return {
+          id: a.id,
+          user_id: a.user_id,
+          name,
+          position,
+          status,
+          hasTimeIn: Boolean(a.time_in),
+          hasTimeOut: Boolean(a.time_out),
+          lateMinutes: Number(a.late_minutes || a.lateMinutes || 0),
+          checkIn: formatTime(a.time_in),
+          time_out: formatTime(a.time_out),
+          tardiness: a.time_in ? tardiness : "-",
+        };
+      });
 
-          if (!byStaff.has(employee)) {
-            byStaff.set(employee, {
-              id: employee,
-              employee,
-              checkoutCount: 0,
-              totalItemsSold: 0,
-              grossTotal: 0,
-              cashCollected: 0,
-              changeGiven: 0,
-              productCounts: new Map(),
-            });
-          }
+      // Sales aggregation per staff (POS checkout)
+      const sales = salesRes.data || [];
+      const byStaff = new Map();
 
-          const agg = byStaff.get(employee);
-          agg.checkoutCount += 1;
-          agg.grossTotal += Number(sale.total || 0);
-          agg.cashCollected += Number(sale.cash_collected || 0);
-          // tolerate backend naming
-          const change = Number(sale.change_given ?? sale.changeGiven ?? 0);
-          agg.changeGiven += change;
+      for (const sale of sales) {
+        const userId = sale.user_id || sale.user?.id;
+        const staffUser = staffById.get(userId) || sale.user;
+        const employee = safeName(staffUser);
 
-          for (const item of sale.items || []) {
-            const qty = Number(item.quantity || 0);
-            agg.totalItemsSold += qty;
-            const productName = item.product?.name || `Product ${item.product_id}`;
-            agg.productCounts.set(productName, (agg.productCounts.get(productName) || 0) + qty);
-          }
-        }
-
-        const salesRows = Array.from(byStaff.values()).map((row, idx) => {
-          let topCategory = "N/A";
-          let best = 0;
-          for (const [productName, qty] of row.productCounts.entries()) {
-            if (qty > best) {
-              best = qty;
-              topCategory = productName;
-            }
-          }
-          return {
-            ...row,
-            id: idx + 1,
-            topCategory,
-          };
-        });
-
-        // Basic performance metrics (computed from attendance + sales for the selected date)
-        const perfByName = new Map();
-        for (const a of attendance) {
-          perfByName.set(a.name, {
-            id: a.id,
-            employee: a.name,
-            attendanceRate: calculateAttendanceRate(a),
-            productivity: 0,
-            qualityScore: 100,
+        if (!byStaff.has(employee)) {
+          byStaff.set(employee, {
+            id: employee,
+            employee,
+            checkoutCount: 0,
+            totalItemsSold: 0,
+            grossTotal: 0,
+            cashCollected: 0,
+            changeGiven: 0,
+            productCounts: new Map(),
           });
         }
-        const maxCheckouts = Math.max(1, ...salesRows.map((s) => s.checkoutCount || 0));
-        for (const s of salesRows) {
-          const existing = perfByName.get(s.employee) || {
-            id: s.id,
-            employee: s.employee,
-            attendanceRate: 0,
-            productivity: 0,
-            qualityScore: 100,
-          };
-          existing.productivity = Math.round((Number(s.checkoutCount || 0) / maxCheckouts) * 100);
-          perfByName.set(s.employee, existing);
+
+        const agg = byStaff.get(employee);
+        agg.checkoutCount += 1;
+        agg.grossTotal += Number(sale.total || 0);
+        agg.cashCollected += Number(sale.cash_collected || 0);
+        // tolerate backend naming
+        const change = Number(sale.change_given ?? sale.changeGiven ?? 0);
+        agg.changeGiven += change;
+
+        for (const item of sale.items || []) {
+          const qty = Number(item.quantity || 0);
+          agg.totalItemsSold += qty;
+          const productName = item.product?.name || `Product ${item.product_id}`;
+          agg.productCounts.set(productName, (agg.productCounts.get(productName) || 0) + qty);
         }
-
-        setAttendanceData(attendance);
-        setStaffSalesData(salesRows);
-        setPerformanceData(Array.from(perfByName.values()));
-      } catch (e) {
-        setError(e?.message || "Failed to load employee tracker data from backend.");
-        setAttendanceData([]);
-        setStaffSalesData([]);
-        setPerformanceData([]);
-      } finally {
-        setLoading(false);
       }
-    };
 
-    load();
+      const salesRows = Array.from(byStaff.values()).map((row, idx) => {
+        let topCategory = "N/A";
+        let best = 0;
+        for (const [productName, qty] of row.productCounts.entries()) {
+          if (qty > best) {
+            best = qty;
+            topCategory = productName;
+          }
+        }
+        return {
+          ...row,
+          id: idx + 1,
+          topCategory,
+        };
+      });
+
+      // Basic performance metrics (computed from attendance + sales for the selected date)
+      const perfByName = new Map();
+      for (const a of attendance) {
+        perfByName.set(a.name, {
+          id: a.id,
+          employee: a.name,
+          attendanceRate: calculateAttendanceRate(a),
+          productivity: 0,
+          qualityScore: 100,
+        });
+      }
+      const maxCheckouts = Math.max(1, ...salesRows.map((s) => s.checkoutCount || 0));
+      for (const s of salesRows) {
+        const existing = perfByName.get(s.employee) || {
+          id: s.id,
+          employee: s.employee,
+          attendanceRate: 0,
+          productivity: 0,
+          qualityScore: 100,
+        };
+        existing.productivity = Math.round((Number(s.checkoutCount || 0) / maxCheckouts) * 100);
+        perfByName.set(s.employee, existing);
+      }
+
+      const attendanceData = attendance;
+      const staffSalesData = salesRows;
+      const performanceData = Array.from(perfByName.values());
+
+      // Update state and cache
+      setAttendanceData(attendanceData);
+      setStaffSalesData(staffSalesData);
+      setPerformanceData(performanceData);
+      
+      // Cache the fetched data (30 seconds TTL)
+      setCache(cacheKey, { attendanceData, staffSalesData, performanceData }, 30 * 1000);
+    } catch (e) {
+      console.error('Background fetch failed:', e);
+      // Don't show error for background fetch failures
+    }
+  };
+
+  useEffect(() => {
+    loadEmployeeData();
+    
+    // Periodic cache update every 30 seconds to keep data fresh
+    const interval = setInterval(() => {
+      const cacheKey = `employee_tracker_${selectedDate}`;
+      fetchAndUpdateCache(cacheKey);
+    }, 30 * 1000);
+    
+    return () => clearInterval(interval);
   }, [selectedDate]);
 
   // Filter data by search term
@@ -478,11 +524,6 @@ function EmployeeTracker() {
               {error}
             </div>
           )}
-          {loading && (
-            <div className="bg-white border border-gray-200 rounded-lg px-4 py-3 mb-6 text-gray-600">
-              Loading data from backend...
-            </div>
-          )}
           {/* Summary Cards */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
             <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -567,6 +608,12 @@ function EmployeeTracker() {
                   </div>
                 </div>
               </div>
+              <Button 
+                icon={<ReloadOutlined />}
+                onClick={() => loadEmployeeData(true)}
+              >
+                Refresh
+              </Button>
             </div>
           </div>
 
