@@ -235,8 +235,9 @@ export default function POSScreen() {
     if (user.branch?.id) return user.branch.id;
     if (user.branch?.branch_id) return user.branch.branch_id;
 
-    // Check branchAssignments array
-    const assignments = Array.isArray(user.branchAssignments) ? user.branchAssignments : [];
+    // Check branchAssignments array (both snake_case and camelCase)
+    const assignments = Array.isArray(user.branch_assignments) ? user.branch_assignments : 
+                       Array.isArray(user.branchAssignments) ? user.branchAssignments : [];
     console.log('[GET BRANCH ID] Branch assignments:', assignments);
     
     const activeAssignment = assignments.find((a: any) => a?.is_active) || assignments[0];
