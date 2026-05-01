@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "scheme": "newmoon",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#ffffff"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow NewMoon to access your camera to take attendance selfies."
+        }
+      ]
+    ],
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ],
+      "package": "com.anonymous.newmoon"
+    }
+  }
+}
