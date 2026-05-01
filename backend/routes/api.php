@@ -7,7 +7,8 @@ use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\StaffController;
 use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\SaleController;
-use App\Http\Controllers\Api\StaffAssignmentController; // Add this
+use App\Http\Controllers\Api\StaffAssignmentController;
+use App\Http\Controllers\Api\DeductionIncentiveController;
 
 // PUBLIC ROUTES
 Route::post('/login', [AuthController::class, 'login']);
@@ -36,6 +37,13 @@ Route::middleware('auth:sanctum')->group(function () {
     // Staff Assignments - Add these routes
     Route::get('/staff-assignments', [StaffAssignmentController::class, 'index']);
     Route::get('/staff/{userId}/assignment', [StaffAssignmentController::class, 'getUserAssignment']);
+    
+    // Staff Deductions and Incentives
+    Route::get('/staff/{userId}/deductions/{month}/{year}', [DeductionIncentiveController::class, 'getDeductions']);
+    Route::get('/staff/{userId}/incentives/{month}/{year}', [DeductionIncentiveController::class, 'getIncentives']);
+    Route::post('/staff/{userId}/deductions', [DeductionIncentiveController::class, 'storeDeductions']);
+    Route::post('/staff/{userId}/incentives', [DeductionIncentiveController::class, 'storeIncentives']);
+    Route::get('/deductions-incentives/all', [DeductionIncentiveController::class, 'getAllForMonth']);
     
     // Attendance
     Route::get('/attendance', [AttendanceController::class, 'index']);

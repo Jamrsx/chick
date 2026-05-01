@@ -238,8 +238,15 @@ class AttendanceController extends Controller
 
             $payroll[] = [
                 'attendance_id' => $record->id,
+                'user_id' => $record->user_id,
+                'user' => [
+                    'id' => $record->user->id,
+                    'firstname' => $record->user->firstname,
+                    'lastname' => $record->user->lastname,
+                ],
                 'staff_name' => $record->user->firstname . ' ' . $record->user->lastname,
-                'branch' => $record->branch->name,
+                'branch' => $record->branch,
+                'branch_id' => $record->branch_id,
                 'time_in' => $record->time_in,
                 'time_out' => $record->time_out,
                 'hours_worked' => $hoursWorked,

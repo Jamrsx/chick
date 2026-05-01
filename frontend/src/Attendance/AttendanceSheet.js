@@ -47,7 +47,8 @@ function AttendanceAdmin() {
   };
 
   const hasSavedValues = (values = {}) =>
-    Object.values(values).some((value) => value !== null && value !== undefined && value !== "");
+    Object.keys(values).length > 0 && 
+    (Object.values(values).some(v => v !== 0 && v !== false && v !== null && v !== undefined));
 
   // Update current time
   useEffect(() => {
@@ -105,23 +106,10 @@ function AttendanceAdmin() {
   };
 
   // Load attendance data
-  async function loadAttendanceData(forceRefresh = false) {
+  async function loadAttendanceData(forceRefresh = true) {
     setIsLoading(true);
     try {
-      // Use date-specific cache key
-      const cacheKey = `attendance_${selectedDate}`;
-      
-      // Try to get data from cache first
-      const cachedData = forceRefresh ? null : getCache(cacheKey);
-      
-      // If data is cached and valid, use it
-      if (cachedData) {
-        setAttendanceData(cachedData);
-        setIsLoading(false);
-        return;
-      }
-
-      // Otherwise, fetch from backend
+      // Always fetch fresh data from backend (bypass cache)
       const { data } = await api.get("/attendance/payroll/report", {
         params: { date: selectedDate },
       });
@@ -150,10 +138,20 @@ function AttendanceAdmin() {
         
         const finalBranchId = record.branch_id || branchId || record.branch?.id || null;
 
+        // Extract user ID from various possible locations
+        const userId = record.user?.id || 
+                      record.user_id || 
+                      record.staff_id || 
+                      record.id || 
+                      null;
+
+        console.log('[ATTENDANCE MAPPING] Record:', record);
+        console.log('[ATTENDANCE MAPPING] Extracted userId:', userId);
+
         return {
           id: record.attendance_id || index + 1,
           user: record.user || fallbackUser,
-          userId: record.user?.id || record.user_id || null,
+          userId: userId,
           branch: { 
             name: branchName,
             id: finalBranchId 
@@ -177,8 +175,8 @@ function AttendanceAdmin() {
       
       setAttendanceData(mapped);
       
-      // Cache the fetched data (5 minutes TTL)
-      setCache(cacheKey, mapped);
+      // Load deductions and incentives for all staff
+      await loadDeductionsAndIncentives(mapped);
     } catch (error) {
       console.error("Error loading attendance:", error);
       message.error("Failed to load attendance payroll from backend.");
@@ -186,6 +184,71 @@ function AttendanceAdmin() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  // Load deductions and incentives from database
+  async function loadDeductionsAndIncentives(attendanceRecords) {
+    const dateObj = new Date(selectedDate);
+    const month = dateObj.getMonth() + 1;
+    const year = dateObj.getFullYear();
+    
+    console.log('[LOAD DEDUCTIONS/INCENTIVES] Loading for date:', selectedDate, 'month:', month, 'year:', year);
+    
+    const newDeductions = {};
+    const newIncentives = {};
+    
+    for (const record of attendanceRecords) {
+      if (!record.userId) continue;
+      
+      const staffName = `${record.user.firstname} ${record.user.lastname}`;
+      
+      try {
+        // Fetch deductions
+        const deductionsRes = await api.get(`/staff/${record.userId}/deductions/${month}/${year}`);
+        console.log(`[LOAD DEDUCTIONS] ${staffName}:`, deductionsRes.data);
+        newDeductions[staffName] = {
+          sss: deductionsRes.data.sss || 0,
+          philhealth: deductionsRes.data.philhealth || 0,
+          pagibig: deductionsRes.data.pagibig || 0,
+          cashAdvance: deductionsRes.data.cash_advance || 0,
+          otherDeductions: deductionsRes.data.other_deductions || 0,
+        };
+        
+        // Fetch incentives
+        const incentivesRes = await api.get(`/staff/${record.userId}/incentives/${month}/${year}`);
+        console.log(`[LOAD INCENTIVES] ${staffName}:`, incentivesRes.data);
+        newIncentives[staffName] = {
+          perfectAttendance: incentivesRes.data.perfect_attendance || false,
+          commission: incentivesRes.data.commission || 0,
+          otherIncentives: incentivesRes.data.other_incentives || 0,
+          chicken_sales_incentive: incentivesRes.data.chicken_sales_incentive || 0,
+          chickens_sold: incentivesRes.data.chickens_sold || 0,
+        };
+      } catch (error) {
+        console.error(`Error loading deductions/incentives for ${staffName}:`, error);
+        // Set defaults if API fails
+        newDeductions[staffName] = {
+          sss: 0,
+          philhealth: 0,
+          pagibig: 0,
+          cashAdvance: 0,
+          otherDeductions: 0,
+        };
+        newIncentives[staffName] = {
+          perfectAttendance: false,
+          commission: 0,
+          otherIncentives: 0,
+          chicken_sales_incentive: 0,
+          chickens_sold: 0,
+        };
+      }
+    }
+    
+    console.log('[LOAD DEDUCTIONS/INCENTIVES] Final deductions:', newDeductions);
+    console.log('[LOAD DEDUCTIONS/INCENTIVES] Final incentives:', newIncentives);
+    
+    setDeductions(newDeductions);
+    setIncentives(newIncentives);
   }
 
   useEffect(() => {
@@ -272,19 +335,31 @@ function AttendanceAdmin() {
 
   const calculateDeductions = (staffName, record) => {
     const staffDeductions = deductions[staffName] || {};
-    if (!hasSavedValues(staffDeductions) && record.deductionsApi !== null && record.deductionsApi !== undefined) {
-      return record.deductionsApi;
-    }
-
+    const dailyRate = record.dailyRate || 0;
+    
     let totalDeductions = 0;
 
     if (record.isLate && record.lateMinutes > 0) {
       totalDeductions += record.lateMinutes * 5;
     }
-    if (staffDeductions.sss) totalDeductions += staffDeductions.sss / 22;
-    if (staffDeductions.philhealth) totalDeductions += staffDeductions.philhealth / 22;
-    if (staffDeductions.pagibig) totalDeductions += staffDeductions.pagibig / 22;
-    if (staffDeductions.cashAdvance) totalDeductions += staffDeductions.cashAdvance / 22;
+    
+    // Only calculate deductions if there are database values
+    if (hasSavedValues(staffDeductions)) {
+      // Calculate standard government deductions as percentage of daily rate
+      if (dailyRate > 0) {
+        totalDeductions += dailyRate * 0.045; // SSS: 4.5%
+        totalDeductions += dailyRate * 0.025; // PhilHealth: 2.5%
+        totalDeductions += dailyRate * 0.02; // Pag-IBIG: 2%
+      }
+      
+      // Cash advance from database (monthly, so divide by 22 for daily)
+      if (staffDeductions.cashAdvance) totalDeductions += staffDeductions.cashAdvance / 22;
+    }
+    
+    // Fallback to backend API values if no database values
+    if (!hasSavedValues(staffDeductions) && record.deductionsApi !== null && record.deductionsApi !== undefined) {
+      return record.deductionsApi;
+    }
 
     return totalDeductions;
   };
@@ -292,23 +367,25 @@ function AttendanceAdmin() {
   // Incentives calculation with commission
   const calculateIncentives = (staffName, record) => {
     const staffIncentives = incentives[staffName] || {};
-    if (!hasSavedValues(staffIncentives) && record.incentivesApi !== null && record.incentivesApi !== undefined) {
-      return record.incentivesApi;
-    }
-
+    
     let totalIncentives = 0;
 
-    if (staffIncentives.perfectAttendance && !record.isLate) {
-      totalIncentives += 500 / 22;
-    }
-    if (record.time_in_raw && record.time_out_raw) {
-      const { totalHours } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
-      if (totalHours > 8) {
-        totalIncentives += (totalHours - 8) * 50;
+    // Only calculate incentives if there are database values
+    if (hasSavedValues(staffIncentives)) {
+      // Perfect attendance incentive from database
+      if (staffIncentives.perfectAttendance && !record.isLate) {
+        totalIncentives += 500 / 22;
+      }
+      
+      // Commission from database (monthly, so divide by 22 for daily)
+      if (staffIncentives.commission) {
+        totalIncentives += staffIncentives.commission / 22;
       }
     }
-    if (staffIncentives.commission) {
-      totalIncentives += staffIncentives.commission / 22;
+    
+    // Fallback to backend API values if no database values
+    if (!hasSavedValues(staffIncentives) && record.incentivesApi !== null && record.incentivesApi !== undefined) {
+      return record.incentivesApi;
     }
 
     return totalIncentives;
@@ -832,6 +909,24 @@ function AttendanceAdmin() {
                               onClick={() => {
                                 setSelectedStaff(record);
                                 setShowDeductionsModal(true);
+                                
+                                // Set form values when opening modal
+                                const staffName = `${record.user.firstname} ${record.user.lastname}`;
+                                const dailyRate = record.dailyRate || 0;
+                                
+                                // Calculate daily deduction amounts (what will actually be deducted)
+                                const dailySSS = dailyRate * 0.045; // 4.5% of daily rate
+                                const dailyPhilHealth = dailyRate * 0.025; // 2.5% of daily rate
+                                const dailyPagibig = dailyRate * 0.02; // 2% of daily rate
+                                
+                                form.setFieldsValue({
+                                  sss: dailySSS,
+                                  philhealth: dailyPhilHealth,
+                                  pagibig: dailyPagibig,
+                                  cashAdvance: deductions[staffName]?.cashAdvance || 0,
+                                  perfectAttendance: incentives[staffName]?.perfectAttendance || false,
+                                  commission: incentives[staffName]?.commission || 0,
+                                });
                               }}
                             />
                           </Space>
@@ -948,23 +1043,23 @@ function AttendanceAdmin() {
         width={500}
       >
         <Form form={form} layout="vertical" initialValues={{
-          sss: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.sss || 450,
-          philhealth: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.philhealth || 300,
-          pagibig: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.pagibig || 100,
+          sss: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.sss || 0,
+          philhealth: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.philhealth || 0,
+          pagibig: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.pagibig || 0,
           cashAdvance: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.cashAdvance || 0,
           perfectAttendance: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.perfectAttendance || false,
           commission: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.commission || 0,
         }}>
           <Divider orientation="left" className="!text-sm">Monthly Deductions</Divider>
           <div className="grid grid-cols-2 gap-3">
-            <Form.Item name="sss" label="SSS">
-              <InputNumber prefix="₱" className="w-full" min={0} />
+            <Form.Item name="sss" label="SSS (4.5%)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
-            <Form.Item name="philhealth" label="PhilHealth">
-              <InputNumber prefix="₱" className="w-full" min={0} />
+            <Form.Item name="philhealth" label="PhilHealth (2.5%)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
-            <Form.Item name="pagibig" label="Pag-IBIG">
-              <InputNumber prefix="₱" className="w-full" min={0} />
+            <Form.Item name="pagibig" label="Pag-IBIG (2%)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
             <Form.Item name="cashAdvance" label="Cash Advance">
               <InputNumber prefix="₱" className="w-full" min={0} />
@@ -986,30 +1081,89 @@ function AttendanceAdmin() {
 
           <div className="flex justify-end gap-3 mt-4">
             <Button onClick={() => setShowDeductionsModal(false)}>Cancel</Button>
-            <Button type="primary" onClick={() => {
+            <Button type="primary" onClick={async () => {
               const staffName = `${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`;
               const values = form.getFieldsValue();
+              const userId = selectedStaff?.userId;
+              const dailyRate = selectedStaff?.dailyRate || 0;
               
-              setDeductions(prev => ({
-                ...prev,
-                [staffName]: {
-                  sss: values.sss,
-                  philhealth: values.philhealth,
-                  pagibig: values.pagibig,
-                  cashAdvance: values.cashAdvance,
-                }
-              }));
+              console.log('[DEDUCTIONS MODAL] Selected staff:', selectedStaff);
+              console.log('[DEDUCTIONS MODAL] Staff name:', staffName);
+              console.log('[DEDUCTIONS MODAL] User ID:', userId);
+              console.log('[DEDUCTIONS MODAL] Selected date:', selectedDate);
+              console.log('[DEDUCTIONS MODAL] Daily rate:', dailyRate);
               
-              setIncentives(prev => ({
-                ...prev,
-                [staffName]: {
-                  perfectAttendance: values.perfectAttendance,
-                  commission: values.commission,
-                }
-              }));
+              if (!userId) {
+                console.error('[DEDUCTIONS MODAL] ERROR: Unable to determine staff ID. selectedStaff:', selectedStaff);
+                message.error("Unable to determine staff ID. Please check the staff record.");
+                return;
+              }
               
-              message.success("Deductions and incentives saved");
-              setShowDeductionsModal(false);
+              const dateObj = new Date(selectedDate);
+              const month = dateObj.getMonth() + 1;
+              const year = dateObj.getFullYear();
+              
+              // Calculate standard government deductions (always based on current daily rate)
+              const monthlyRate = dailyRate * 22;
+              const standardSSS = monthlyRate * 0.045; // 4.5%
+              const standardPhilHealth = monthlyRate * 0.025; // 2.5%
+              const standardPagibig = monthlyRate * 0.02; // 2%
+              
+              try {
+                // Save deductions to API (use calculated standard deductions)
+                await api.post(`/staff/${userId}/deductions`, {
+                  sss: standardSSS,
+                  philhealth: standardPhilHealth,
+                  pagibig: standardPagibig,
+                  cash_advance: values.cashAdvance || 0,
+                  other_deductions: 0,
+                  month: month,
+                  year: year,
+                });
+                
+                // Save incentives to API
+                await api.post(`/staff/${userId}/incentives`, {
+                  perfect_attendance: values.perfectAttendance || false,
+                  commission: values.commission || 0,
+                  other_incentives: 0,
+                  chicken_sales_incentive: 0,
+                  chickens_sold: 0,
+                  month: month,
+                  year: year,
+                });
+                
+                // Update local state with calculated values
+                setDeductions(prev => ({
+                  ...prev,
+                  [staffName]: {
+                    sss: standardSSS,
+                    philhealth: standardPhilHealth,
+                    pagibig: standardPagibig,
+                    cashAdvance: values.cashAdvance || 0,
+                    otherDeductions: 0,
+                  }
+                }));
+                
+                setIncentives(prev => ({
+                  ...prev,
+                  [staffName]: {
+                    perfectAttendance: values.perfectAttendance,
+                    commission: values.commission,
+                    otherIncentives: 0,
+                    chicken_sales_incentive: 0,
+                    chickens_sold: 0,
+                  }
+                }));
+                
+                message.success("Deductions and incentives saved to database");
+                setShowDeductionsModal(false);
+                
+                // Refresh attendance data to show updated values immediately
+                await loadAttendanceData(true);
+              } catch (error) {
+                console.error("Error saving deductions/incentives:", error);
+                message.error("Failed to save deductions and incentives");
+              }
             }}>Save Changes</Button>
           </div>
         </Form>
