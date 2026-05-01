@@ -159,12 +159,12 @@ const DashboardScreen = () => {
   };
 
   const StatCard = ({ title, value, icon, color }: any) => (
-    <View className="bg-white rounded-xl p-5 shadow-sm border border-gray-100" style={{ width: width * 0.44 }}>
-      <View className={`${color} p-3 rounded-xl w-12 h-12 mb-3`}>
-        <Icon name={icon} size={22} color="white" />
+    <View className="bg-white rounded-xl p-4 shadow-sm border border-gray-100" style={{ width: width * 0.28, minHeight: 140 }}>
+      <View className={`${color} p-3 rounded-xl w-10 h-10 mb-3 items-center justify-center`}>
+        <Icon name={icon} size={18} color="white" />
       </View>
-      <Text className="text-3xl font-bold text-gray-800 mb-1">{value}</Text>
-      <Text className="text-gray-500 text-xs font-medium">{title}</Text>
+      <Text className="text-xl font-bold text-gray-800 mb-1" numberOfLines={1}>{value}</Text>
+      <Text className="text-gray-500 text-xs font-medium leading-tight" numberOfLines={2}>{title}</Text>
     </View>
   );
 
@@ -224,9 +224,9 @@ const DashboardScreen = () => {
         </View>
 
         {/* Stats Grid */}
-        <View className="px-6 mt-8">
+        <View className="px-6 mt-6">
           <Text className="text-gray-800 text-xl font-bold mb-4">Inventory Overview</Text>
-          <View className="flex-row flex-wrap justify-between gap-4">
+          <View className="flex-row justify-between gap-2">
             <StatCard 
               title="Total Products" 
               value={stockData.length} 
@@ -249,62 +249,66 @@ const DashboardScreen = () => {
         </View>
 
         {/* Inventory Value Card */}
-        <View className="px-6 mt-6">
-          <View className="bg-purple-600 rounded-xl p-5 shadow-sm">
+        <View className="px-6 mt-3 mb-2">
+          <View className="bg-purple-600 rounded-xl p-4 shadow-md">
             <View className="flex-row justify-between items-center">
-              <View>
-                <Text className="text-white/90 text-xs font-semibold tracking-wider uppercase mb-2">Total Inventory Value</Text>
-                <Text className="text-white text-3xl font-bold">₱{getTotalValue().toLocaleString()}</Text>
+              <View className="flex-1">
+                <Text className="text-white/90 text-xs font-semibold tracking-wider uppercase mb-1">Total Inventory Value</Text>
+                <Text className="text-white text-2xl font-bold">₱{getTotalValue().toLocaleString()}</Text>
+                <Text className="text-white/70 text-xs mt-1">Across all products</Text>
               </View>
-              <View className="bg-white/20 p-4 rounded-xl">
-                <Text className="text-white text-2xl font-bold">₱</Text>
+              <View className="bg-purple-700 p-3 rounded-xl">
+                <Icon name="account-balance-wallet" size={20} color="white" />
               </View>
             </View>
           </View>
         </View>
 
         {/* Stock Details List */}
-        <View className="px-6 mt-8">
-          <Text className="text-gray-800 text-xl font-bold mb-4">Current Stock Levels</Text>
+        <View className="px-6 mt-4">
+          <View className="flex-row justify-between items-center mb-4">
+            <Text className="text-gray-800 text-xl font-bold">Current Stock Levels</Text>
+            <Text className="text-gray-500 text-sm">{stockData.length} items</Text>
+          </View>
           {stockData.map((item) => (
-            <View key={item.id} className="bg-white rounded-xl p-5 mb-4 shadow-sm border border-gray-100">
-              <View className="flex-row justify-between items-start mb-4">
-                <View className="flex-1">
-                  <Text className="text-gray-900 font-bold text-xl mb-2">{item.name}</Text>
-                  <Text className="text-gray-500 text-sm">{item.category} - {item.type}</Text>
+            <View key={item.id} className="bg-white rounded-xl p-4 mb-3 shadow-sm border border-gray-100">
+              <View className="flex-row justify-between items-start mb-3">
+                <View className="flex-1 pr-3">
+                  <Text className="text-gray-900 font-bold text-lg mb-1" numberOfLines={2}>{item.name}</Text>
+                  <Text className="text-gray-500 text-xs" numberOfLines={1}>{item.category} • {item.type}</Text>
                 </View>
-                <View className={`px-4 py-2 rounded-xl ${
+                <View className={`px-3 py-1 rounded-lg shrink-0 ${
                   item.status === 'Low Stock' ? 'bg-yellow-100' : 'bg-green-100'
                 }`}>
-                  <Text className={`text-sm font-bold ${
+                  <Text className={`text-xs font-bold ${
                     item.status === 'Low Stock' ? 'text-yellow-700' : 'text-green-700'
-                  }`}>
+                  }`} numberOfLines={1}>
                     {item.status}
                   </Text>
                 </View>
               </View>
               
-              <View className="flex-row justify-between items-center pt-4 border-t border-gray-100">
-                <View>
+              <View className="flex-row justify-between items-center pt-3 border-t border-gray-100">
+                <View className="flex-1 items-center">
                   <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-1">Quantity</Text>
-                  <Text className="text-3xl font-bold text-gray-800">{item.quantity}</Text>
+                  <Text className="text-2xl font-bold text-gray-800" numberOfLines={1}>{item.quantity}</Text>
                 </View>
-                <View>
+                <View className="flex-1 items-center">
                   <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-1">Price</Text>
-                  <Text className="text-2xl font-bold text-green-600">₱{item.price}</Text>
+                  <Text className="text-lg font-bold text-green-600" numberOfLines={1}>₱{item.price}</Text>
                 </View>
-                <View>
+                <View className="flex-1 items-center">
                   <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-1">Min. Stock</Text>
-                  <Text className="text-xl font-bold text-gray-700">{item.minStock}</Text>
+                  <Text className="text-lg font-bold text-gray-700" numberOfLines={1}>{item.minStock}</Text>
                 </View>
               </View>
 
               {item.quantity <= item.minStock && (
-                <View className="mt-4 pt-3 border-t border-yellow-200 bg-yellow-50 rounded-xl p-3">
+                <View className="mt-3 pt-2 border-t border-yellow-200 bg-yellow-50 rounded-lg p-2">
                   <View className="flex-row items-center">
-                    <Icon name="warning" size={16} color="#F59E0B" />
-                    <Text className="text-yellow-700 text-sm font-medium ml-2">
-                      Reorder soon! Current stock is at minimum level.
+                    <Icon name="warning" size={14} color="#F59E0B" />
+                    <Text className="text-yellow-700 text-xs font-medium ml-2 flex-1">
+                      Stock at minimum level - reorder recommended
                     </Text>
                   </View>
                 </View>
@@ -315,13 +319,13 @@ const DashboardScreen = () => {
 
         {/* Low Stock Alert Section */}
         {getLowStockCount() > 0 && (
-          <View className="px-6 mt-6">
-            <View className="bg-yellow-50 rounded-xl p-5 border border-yellow-200">
-              <View className="flex-row items-center mb-3">
-                <Icon name="warning" size={24} color="#F59E0B" />
-                <Text className="text-yellow-800 font-bold text-lg ml-3">Low Stock Alert!</Text>
+          <View className="px-6 mt-4">
+            <View className="bg-yellow-50 rounded-xl p-4 border border-yellow-200">
+              <View className="flex-row items-center mb-2">
+                <Icon name="warning" size={20} color="#F59E0B" />
+                <Text className="text-yellow-800 font-bold text-base ml-2">Low Stock Alert!</Text>
               </View>
-              <Text className="text-yellow-700 text-base">
+              <Text className="text-yellow-700 text-sm">
                 {getLowStockCount()} item(s) are running low. Please restock soon.
               </Text>
             </View>
@@ -329,10 +333,10 @@ const DashboardScreen = () => {
         )}
 
         {/* Footer */}
-        <View className="bg-white py-6 px-6 border-t border-gray-200 mt-8 mb-6">
-          <View className="flex-row justify-center items-center mb-3">
-            <Icon name="store" size={16} color="#9CA3AF" />
-            <Text className="text-center text-gray-600 text-sm font-medium ml-2">
+        <View className="bg-white py-4 px-6 border-t border-gray-200 mt-6 mb-4">
+          <View className="flex-row justify-center items-center mb-2">
+            <Icon name="store" size={14} color="#9CA3AF" />
+            <Text className="text-center text-gray-600 text-xs font-medium ml-2">
               New Moon Lechon House - Staff Portal
             </Text>
           </View>
