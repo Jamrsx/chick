@@ -44,34 +44,34 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const login = async (username: string, password: string) => {
-  try {
-    const data = await api.login(username, password);
+    try {
+      const data = await api.login(username, password);
 
-    setUser(data.user);
-    setIsAuthenticated(true);
+      setUser(data.user);
+      setIsAuthenticated(true);
 
-    return { success: true };
-  } catch (error: any) {
-    console.log('[LOGIN ERROR]', error);
+      return { success: true };
+    } catch (error: any) {
+      console.log('[LOGIN ERROR]', error);
 
-    const status = error?.response?.status;
+      const status = error?.response?.status;
 
-    let msg = 'Invalid username or password';
+      let msg = 'Invalid username or password';
 
-    if (!error?.response) {
-      msg = 'Cannot connect to the server. Check that the backend is running and your phone is on the same network.';
-    } else if (status === 401 || status === 403) {
-      msg = 'Invalid username or password';
-    } else if (error?.response?.data?.message) {
-      msg = 'Login failed. Please try again.';
+      if (!error?.response) {
+        msg = 'Cannot connect to the server. Check that the backend is running and your phone is on the same network.';
+      } else if (status === 401 || status === 403) {
+        msg = 'Invalid username or password';
+      } else if (error?.response?.data?.message) {
+        msg = 'Login failed. Please try again.';
+      }
+
+      return {
+        success: false,
+        error: msg,
+      };
     }
-
-    return {
-      success: false,
-      error: msg,
-    };
-  }
-};
+  };
 
   const logout = async () => {
     try {

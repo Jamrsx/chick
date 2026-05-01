@@ -10,9 +10,9 @@ export default function StaffTabsLayout() {
         tabBarActiveTintColor: '#DC2626',
         tabBarInactiveTintColor: '#6B7280',
         tabBarStyle: {
-          height: 62,
+          height: 90,
           paddingTop: 6,
-          paddingBottom: 8,
+          paddingBottom: 20,
         },
         tabBarLabelStyle: {
           fontSize: 11,

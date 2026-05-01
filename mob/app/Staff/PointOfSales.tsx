@@ -18,6 +18,7 @@ import {
     TouchableWithoutFeedback,
     View
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api } from '../../config/api';
 
 const { height: screenHeight } = Dimensions.get('window');
@@ -54,6 +55,7 @@ type StockItem = {
 };
 
 export default function POSScreen() {
+  const insets = useSafeAreaInsets();
   const [products, setProducts] = useState<StockItem[]>([]);
   const [cart, setCart] = useState<(StockItem & { quantity: number })[]>([]);
   const [cash, setCash] = useState('');
@@ -223,12 +225,56 @@ export default function POSScreen() {
 
   const getBranchIdFromUser = (user: any) => {
     if (!user) return null;
+    
+    console.log('[GET BRANCH ID] User data:', user);
+    
+    // Direct branch ID properties
     if (user.branch_id) return user.branch_id;
     if (user.branchId) return user.branchId;
+    if (user.branch?.id) return user.branch.id;
+    if (user.branch?.branch_id) return user.branch.branch_id;
 
+    // Check branchAssignments array
     const assignments = Array.isArray(user.branchAssignments) ? user.branchAssignments : [];
+    console.log('[GET BRANCH ID] Branch assignments:', assignments);
+    
     const activeAssignment = assignments.find((a: any) => a?.is_active) || assignments[0];
-    return activeAssignment?.branch_id || activeAssignment?.branch?.id || activeAssignment?.branch?.branch_id || null;
+    console.log('[GET BRANCH ID] Active assignment:', activeAssignment);
+    
+    if (activeAssignment) {
+      const branchId = activeAssignment?.branch_id || 
+                       activeAssignment?.branch?.id || 
+                       activeAssignment?.branch?.branch_id ||
+                       activeAssignment?.id;
+      if (branchId) return branchId;
+    }
+
+    // Fallback: Check if user has branch info in nested objects
+    if (user.staff?.branch_id) return user.staff.branch_id;
+    if (user.staff?.branch?.id) return user.staff.branch.id;
+    
+    // Special fallback for COD branch - check if user has COD in any branch-related field
+    const hasCODBranch = assignments.some((a: any) => 
+      a?.branch?.name === 'COD' || 
+      a?.branch_name === 'COD' ||
+      a?.name === 'COD'
+    );
+    
+    if (hasCODBranch) {
+      console.log('[GET BRANCH ID] Found COD branch assignment');
+      const codAssignment = assignments.find((a: any) => 
+        a?.branch?.name === 'COD' || 
+        a?.branch_name === 'COD' ||
+        a?.name === 'COD'
+      );
+      return codAssignment?.branch_id || 
+             codAssignment?.branch?.id || 
+             codAssignment?.branch?.branch_id ||
+             codAssignment?.id;
+    }
+
+    console.log('[GET BRANCH ID] No branch ID found');
+    return null;
   };
 
   const handleCheckout = async () => {
@@ -245,14 +291,23 @@ export default function POSScreen() {
       `${item.name} x${item.quantity} = ₱${item.price * item.quantity}`
     ).join('\n');
     
+    console.log('[POS CHECKOUT] Cart items:', cart);
+    console.log('[POS CHECKOUT] Order items string:', orderItems);
+    console.log('[POS CHECKOUT] Total:', total);
+    console.log('[POS CHECKOUT] Cash:', cash);
+    console.log('[POS CHECKOUT] Change:', change);
+    
     try {
       const userRaw = await AsyncStorage.getItem('user');
       let user = userRaw ? JSON.parse(userRaw) : null;
+
+      console.log('[POS CHECKOUT] Initial user data:', user);
 
       if (!user?.id) {
         try {
           const meResponse = await api.get('me');
           user = meResponse.data;
+          console.log('[POS CHECKOUT] Fetched user from /me:', user);
           if (user?.id) {
             await AsyncStorage.setItem('user', JSON.stringify(user));
           }
@@ -262,12 +317,20 @@ export default function POSScreen() {
       }
 
       let branchId = getBranchIdFromUser(user);
+      console.log('[POS CHECKOUT] Branch ID from user:', branchId);
+      console.log('[POS CHECKOUT] User branchAssignments:', user?.branchAssignments);
+      console.log('[POS CHECKOUT] User branch_id:', user?.branch_id);
+      console.log('[POS CHECKOUT] User branchId:', user?.branchId);
 
       if (!branchId && user?.id) {
         try {
+          console.log('[POS CHECKOUT] Fetching staff data for user ID:', user.id);
           const staffResponse = await api.get(`staff/${user.id}`);
           const staffData = staffResponse.data;
+          console.log('[POS CHECKOUT] Staff data:', staffData);
+          
           branchId = getBranchIdFromUser(staffData);
+          console.log('[POS CHECKOUT] Branch ID from staff data:', branchId);
 
           if (branchId) {
             user = {
@@ -276,13 +339,49 @@ export default function POSScreen() {
               branchAssignments: staffData?.branchAssignments || user?.branchAssignments,
             };
             await AsyncStorage.setItem('user', JSON.stringify(user));
+            console.log('[POS CHECKOUT] Updated user with branch info:', user);
           }
         } catch (error) {
           console.error('Unable to fetch staff branch assignment:', error);
         }
       }
 
+      // Final fallback: Try to get COD branch directly
+      if (!branchId) {
+        try {
+          console.log('[POS CHECKOUT] Attempting to fetch COD branch directly');
+          const branchesResponse = await api.get('branches');
+          const branches = branchesResponse.data;
+          console.log('[POS CHECKOUT] Available branches:', branches);
+          
+          const codBranch = branches.find((b: any) => 
+            b.name === 'COD' || 
+            b.branch_name === 'COD' ||
+            b.code === 'COD'
+          );
+          
+          if (codBranch) {
+            branchId = codBranch.id || codBranch.branch_id;
+            console.log('[POS CHECKOUT] Found COD branch:', codBranch, 'Branch ID:', branchId);
+            
+            // Update user with COD branch info
+            user = {
+              ...user,
+              branch_id: branchId,
+              branch: { id: branchId, name: 'COD' }
+            };
+            await AsyncStorage.setItem('user', JSON.stringify(user));
+          }
+        } catch (error) {
+          console.error('Unable to fetch COD branch:', error);
+        }
+      }
+
+      console.log('[POS CHECKOUT] Final user ID:', user?.id);
+      console.log('[POS CHECKOUT] Final branch ID:', branchId);
+
       if (!user?.id || !branchId) {
+        console.log('[POS CHECKOUT] Missing context - User ID:', user?.id, 'Branch ID:', branchId);
         Alert.alert('Missing User Context', 'Unable to determine staff or branch for checkout.');
         return;
       }
@@ -297,9 +396,14 @@ export default function POSScreen() {
           quantity: item.quantity,
         })),
       });
+      const orderSummary = orderItems || 'No items details available';
+      const alertMessage = `${orderSummary}\n\n━━━━━━━━━━━━━━━━\nTotal: ₱${total}\nCash: ₱${cash}\nChange: ₱${change}`;
+      
+      console.log('[POS CHECKOUT] Alert message:', alertMessage);
+      
       Alert.alert(
         '✅ Order Complete!',
-        `${orderItems}\n\n━━━━━━━━━━━━━━━━\nTotal: ₱${total}\nCash: ₱${cash}\nChange: ₱${change}`,
+        alertMessage,
         [{ text: 'New Order' }]
       );
       setCart([]);
@@ -408,7 +512,7 @@ export default function POSScreen() {
               ref={scrollViewRef}
               showsVerticalScrollIndicator={false}
               className="flex-1"
-              contentContainerStyle={{ flexGrow: 1, minHeight: screenHeight, paddingBottom: 120 }}
+              contentContainerStyle={{ flexGrow: 1, minHeight: screenHeight, paddingBottom: Math.max(120, insets.bottom + 100) }}
               keyboardShouldPersistTaps="handled"
             >
               <View className="p-4">
