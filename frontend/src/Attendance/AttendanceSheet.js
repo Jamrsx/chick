@@ -5,7 +5,9 @@ import {
   PrinterOutlined,
   EditOutlined,
   UserOutlined,
-  ReloadOutlined
+  ReloadOutlined,
+  DownOutlined,
+  RightOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../config/api";
@@ -56,10 +58,32 @@ function AttendanceAdmin() {
   const [activeAttendanceId, setActiveAttendanceId] = useState(null);
   /** Per-staff current page for daily detail rows (key: userId or staff name fallback). */
   const [dailyRecordsPageByStaff, setDailyRecordsPageByStaff] = useState({});
+  /** Per-staff collapsed state persisted in localStorage. */
+  const [collapsedStaff, setCollapsedStaff] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('attendance_collapsed_staff')) || {};
+    } catch {
+      return {};
+    }
+  });
   const [form] = Form.useForm();
 
   const dailyRecordsStaffKey = (employee) =>
     employee.userId != null ? String(employee.userId) : `name:${employee.staffName}`;
+
+  const isStaffCollapsed = (employee) => {
+    const key = dailyRecordsStaffKey(employee);
+    return !!collapsedStaff[key];
+  };
+
+  const toggleStaffCollapse = (employee) => {
+    const key = dailyRecordsStaffKey(employee);
+    setCollapsedStaff((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      localStorage.setItem('attendance_collapsed_staff', JSON.stringify(next));
+      return next;
+    });
+  };
 
   const getDailyRecordsPage = (employee) => {
     const key = dailyRecordsStaffKey(employee);
@@ -1024,8 +1048,20 @@ function AttendanceAdmin() {
                     <React.Fragment key={employee.userId}>
                       <tr className="hover:bg-gray-50">
                         <td className="px-4 py-3">
-                          <div className="font-medium text-gray-800">{employee.staffName}</div>
-                          <div className="text-xs text-gray-500">Daily Rate: {formatCurrency(employee.dailyRate)}</div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="text"
+                              size="small"
+                              icon={isStaffCollapsed(employee) ? <RightOutlined /> : <DownOutlined />}
+                              onClick={() => toggleStaffCollapse(employee)}
+                              className="!p-0 !min-w-[24px] !h-[24px]"
+                              title={isStaffCollapsed(employee) ? 'Expand' : 'Collapse'}
+                            />
+                            <div>
+                              <div className="font-medium text-gray-800">{employee.staffName}</div>
+                              <div className="text-xs text-gray-500">Daily Rate: {formatCurrency(employee.dailyRate)}</div>
+                            </div>
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-gray-600">{employee.branch?.name || 'N/A'}</td>
                         <td className="px-4 py-3 text-center">
@@ -1071,8 +1107,8 @@ function AttendanceAdmin() {
                         </td>
                       </tr>
                       
-                      {/* Daily attendance details (paginated) */}
-                      {(() => {
+                      {/* Daily attendance details (paginated) — hidden when collapsed */}
+                      {!isStaffCollapsed(employee) && (() => {
                         const dailyPage = getDailyRecordsPage(employee);
                         const start = (dailyPage - 1) * DAILY_RECORDS_PAGE_SIZE;
                         const pageRecords = employee.payrollRecords.slice(

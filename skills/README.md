@@ -9,6 +9,7 @@ Short references for developers (and AI assistants) working on **chick**. Read t
 | Writing functions & structuring JS/React code | [functions-and-organization.md](functions-and-organization.md) |
 | Laravel (this backend) | [laravel.md](laravel.md) |
 | React (this frontend) | [react.md](react.md) |
+| Efficient DB fetching / avoiding N+1 | [efficient-data-fetching.md](efficient-data-fetching.md) |
 | Expo / React Native (`mob/`) | [expo.md](expo.md) |
 | Navigation & routing (web vs mobile) | [navigation-and-routing.md](navigation-and-routing.md) |
 
