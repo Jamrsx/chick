@@ -51,6 +51,7 @@ function AttendanceAdmin() {
   const [showDeductionsModal, setShowDeductionsModal] = useState(false);
   const [deductions, setDeductions] = useState({});
   const [incentives, setIncentives] = useState({});
+  const [salesIncentives, setSalesIncentives] = useState({});
   const [isPrintModalVisible, setIsPrintModalVisible] = useState(false);
   const [printType, setPrintType] = useState("all");
   const [selectedStaffForPrint, setSelectedStaffForPrint] = useState([]);
@@ -341,6 +342,18 @@ function AttendanceAdmin() {
     
     setDeductions(newDeductions);
     setIncentives(newIncentives);
+
+    // Fetch daily product sales incentives
+    try {
+      const salesRes = await api.get('/sales/product-incentives/daily', {
+        params: { month: monthNum, year: yearNum },
+      });
+      // Store as-is: { userId: { date: { date, daily_quantity, running_total, incentive_amount } } }
+      setSalesIncentives(salesRes.data || {});
+    } catch (error) {
+      console.error('[LOAD SALES INCENTIVES] Error:', error);
+      setSalesIncentives({});
+    }
   }
 
   useEffect(() => {
@@ -465,7 +478,7 @@ function AttendanceAdmin() {
     );
   };
 
-  // Incentives calculation with commission
+  // Incentives calculation with commission + sales incentive
   const calculateIncentives = (staffName, record) => {
     const staffIncentives = incentives[staffName] || {};
     
@@ -490,6 +503,37 @@ function AttendanceAdmin() {
     }
 
     return totalIncentives;
+  };
+
+  // Get sales incentive for a specific date
+  const getDailySalesIncentive = (userId, date) => {
+    if (!userId || !date) return { dailyQuantity: 0, incentiveAmount: 0 };
+    const userData = salesIncentives[String(userId)];
+    if (!userData) return { dailyQuantity: 0, incentiveAmount: 0 };
+    const dateData = userData[date];
+    return {
+      dailyQuantity: dateData?.daily_quantity || 0,
+      incentiveAmount: dateData?.incentive_amount || 0,
+    };
+  };
+
+  // Get total monthly sales incentive for a user
+  const getMonthlySalesIncentive = (userId) => {
+    if (!userId) return { productsSold: 0, incentiveAmount: 0 };
+    const userData = salesIncentives[String(userId)];
+    if (!userData) return { productsSold: 0, incentiveAmount: 0 };
+    
+    // Get the last entry (highest running total) for the month
+    const dates = Object.keys(userData).sort();
+    if (dates.length === 0) return { productsSold: 0, incentiveAmount: 0 };
+    
+    const lastDate = dates[dates.length - 1];
+    const lastData = userData[lastDate];
+    
+    return {
+      productsSold: lastData?.running_total || 0,
+      incentiveAmount: lastData?.incentive_amount || 0,
+    };
   };
 
   const filteredData = attendanceData
@@ -560,7 +604,10 @@ function AttendanceAdmin() {
       };
       
       const monthlyDeductions = calculateDeductions(employee.staffName, monthlySummaryData);
-      const monthlyNetPay = totalGrossPay - monthlyDeductions + totalIncentives;
+      // Add sales incentive (monthly amount based on products sold)
+      const salesIncentive = getMonthlySalesIncentive(employee.userId);
+      const totalIncentivesWithSales = totalIncentives + salesIncentive.incentiveAmount;
+      const monthlyNetPay = totalGrossPay - monthlyDeductions + totalIncentivesWithSales;
 
       // Calculate projected full month salary (using actual days in month)
       const [year, month] = selectedMonth.split('-');
@@ -588,6 +635,8 @@ function AttendanceAdmin() {
           totalHoursWorked,
           daysPresent,
           daysLate,
+          salesIncentive: salesIncentive.incentiveAmount,
+          productsSold: salesIncentive.productsSold,
           projectedMonthlyGross,
           projectedMonthlyDeductions,
           projectedMonthlyIncentives,
@@ -607,6 +656,7 @@ function AttendanceAdmin() {
   // Calculate overall totals
   const overallTotalGross = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalGrossPay, 0);
   const overallTotalDeductions = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalDeductions, 0);
+  const overallTotalSalesIncentive = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.salesIncentive, 0);
   const overallTotalNet = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalNetPay, 0);
   const overallTotalProjected = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.projectedMonthlyNet, 0);
 
@@ -682,6 +732,14 @@ function AttendanceAdmin() {
               <td style="padding: 8px; border: 1px solid #ddd;">PhilHealth (2.5%)</td>
               <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(govDeductions.philhealth)}</td>
             </tr>
+            ${employee.monthlySummary.salesIncentive > 0 ? `
+            <tr>
+              <td style="padding: 8px; border: 1px solid #ddd;">Sales Incentive (${employee.monthlySummary.productsSold} products sold)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(employee.monthlySummary.salesIncentive)}</td>
+              <td style="padding: 8px; border: 1px solid #;"></td>
+              <td style="padding: 8px; border: 1px solid #;"></td>
+            </tr>
+            ` : ''}
             <tr>
               <td style="padding: 8px; border: 1px solid #;"></td>
               <td style="padding: 8px; border: 1px solid #;"></td>
@@ -698,7 +756,7 @@ function AttendanceAdmin() {
           <tfoot>
             <tr style="background: #e8f5e9;">
               <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">TOTAL EARNINGS</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(employee.monthlySummary.totalGrossPay + employee.monthlySummary.totalIncentives)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(employee.monthlySummary.totalGrossPay + employee.monthlySummary.totalIncentives + employee.monthlySummary.salesIncentive)}</td>
               <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">TOTAL DEDUCTIONS</td>
               <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(employee.monthlySummary.totalDeductions)}</td>
             </tr>
@@ -935,7 +993,7 @@ function AttendanceAdmin() {
 
       <div className="max-w-7xl mx-auto px-6 py-6" style={{ minHeight: '120vh' }}>
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-6">
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Staff</p>
             <p className="text-2xl font-bold text-gray-800">{filteredMonthlyPayroll.length}</p>
@@ -943,10 +1001,14 @@ function AttendanceAdmin() {
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Gross</p>
             <p className="text-2xl font-bold text-green-600">{formatCurrency(overallTotalGross)}</p>
-          </div> 
+          </div>
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Deductions</p>
             <p className="text-2xl font-bold text-red-500">{formatCurrency(overallTotalDeductions)}</p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Sales Incentive</p>
+            <p className="text-2xl font-bold text-orange-500">{formatCurrency(overallTotalSalesIncentive)}</p>
           </div>
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Net Pay</p>
@@ -1022,6 +1084,7 @@ function AttendanceAdmin() {
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">DAYS LATE</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY GROSS</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">DEDUCTIONS</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">SALES INCENTIVE</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY NET</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">PROJECTED</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">ACTIONS</th>
@@ -1030,7 +1093,7 @@ function AttendanceAdmin() {
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-12">
+                    <td colSpan={10} className="text-center py-12">
                       <div className="flex justify-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                       </div>
@@ -1039,7 +1102,7 @@ function AttendanceAdmin() {
                   </tr>
                 ) : filteredMonthlyPayroll.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="text-center py-12 text-gray-500">
+                    <td colSpan={10} className="text-center py-12 text-gray-500">
                       No attendance records found for this month.
                     </td>
                   </tr>
@@ -1082,6 +1145,16 @@ function AttendanceAdmin() {
                         <td className="px-4 py-3 text-right">
                           {employee.monthlySummary.totalDeductions > 0 ? (
                             <span className="text-red-600 font-medium">{formatCurrency(employee.monthlySummary.totalDeductions)}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {employee.monthlySummary.salesIncentive > 0 ? (
+                            <div>
+                              <span className="text-orange-600 font-medium">{formatCurrency(employee.monthlySummary.salesIncentive)}</span>
+                              <div className="text-xs text-gray-500">{employee.monthlySummary.productsSold} sold</div>
+                            </div>
                           ) : (
                             <span className="text-gray-400">—</span>
                           )}
@@ -1139,6 +1212,20 @@ function AttendanceAdmin() {
                                   {formatCurrency(record.dailyEarnings)}
                                 </td>
                                 <td className="px-4 py-2 text-xs text-gray-400 text-right">—</td>
+                                <td className="px-4 py-2 text-xs text-right">
+                                  {(() => {
+                                    const dailySales = getDailySalesIncentive(employee.userId, record.date);
+                                    if (dailySales.dailyQuantity > 0) {
+                                      return (
+                                        <span className="text-orange-600">
+                                          {formatCurrency(dailySales.incentiveAmount)}
+                                          <span className="text-xs text-gray-500 ml-1">(+{dailySales.dailyQuantity})</span>
+                                        </span>
+                                      );
+                                    }
+                                    return <span className="text-gray-400">—</span>;
+                                  })()}
+                                </td>
                                 <td className="px-4 py-2 text-xs text-blue-600 text-right">
                                   {formatCurrency(record.netPay)}
                                 </td>
@@ -1149,7 +1236,7 @@ function AttendanceAdmin() {
                             ))}
                             {employee.payrollRecords.length > DAILY_RECORDS_PAGE_SIZE && (
                               <tr className="bg-gray-50 border-l-4 border-blue-200">
-                                <td colSpan={9} className="px-4 py-3">
+                                <td colSpan={10} className="px-4 py-3">
                                   <div className="flex justify-end">
                                     <Pagination
                                       size="small"
@@ -1184,6 +1271,7 @@ function AttendanceAdmin() {
                     <td colSpan={4} className="px-4 py-3 text-right font-semibold text-gray-700">TOTAL:</td>
                     <td className="px-4 py-3 font-semibold text-green-600 text-right">{formatCurrency(overallTotalGross)}</td>
                     <td className="px-4 py-3 font-semibold text-red-600 text-right">{formatCurrency(overallTotalDeductions)}</td>
+                    <td className="px-4 py-3 font-semibold text-orange-600 text-right">{formatCurrency(overallTotalSalesIncentive)}</td>
                     <td className="px-4 py-3 font-semibold text-blue-600 text-right">{formatCurrency(overallTotalNet)}</td>
                     <td className="px-4 py-3 font-semibold text-purple-600 text-right">{formatCurrency(overallTotalProjected)}</td>
                     <td></td>

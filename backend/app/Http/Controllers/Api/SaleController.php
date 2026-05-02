@@ -117,6 +117,101 @@ class SaleController extends Controller
         return response()->json($sale);
     }
 
+    public function getProductIncentives(Request $request)
+    {
+        \Log::info('[BACKEND] getProductIncentives called', $request->all());
+
+        $validated = $request->validate([
+            'month' => 'required|integer|min:1|max:12',
+            'year' => 'required|integer|min:2020',
+        ]);
+
+        \Log::info('[BACKEND] Validated:', $validated);
+
+        // Single query: sum sale_items.quantity grouped by sales.user_id
+        // for the given month/year
+        $productCounts = DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
+            ->whereMonth('sales.sale_date', $validated['month'])
+            ->whereYear('sales.sale_date', $validated['year'])
+            ->select('sales.user_id', DB::raw('SUM(sale_items.quantity) as total_products_sold'))
+            ->groupBy('sales.user_id')
+            ->get();
+
+        \Log::info('[BACKEND] Product counts:', $productCounts->toArray());
+
+        // Compute incentive: every 40 products = ₱100
+        $result = [];
+        foreach ($productCounts as $row) {
+            $totalSold = (int) $row->total_products_sold;
+            $incentiveAmount = floor($totalSold / 40) * 100;
+
+            $result[$row->user_id] = [
+                'user_id' => $row->user_id,
+                'total_products_sold' => $totalSold,
+                'incentive_amount' => $incentiveAmount,
+                'thresholds_reached' => floor($totalSold / 40),
+            ];
+        }
+
+        \Log::info('[BACKEND] Final result:', $result);
+
+        return response()->json($result);
+    }
+
+    /**
+     * Get daily product sales incentives per user for a month
+     * Returns sales grouped by date so frontend can show incentive on specific days
+     */
+    public function getDailyProductIncentives(Request $request)
+    {
+        $validated = $request->validate([
+            'month' => 'required|integer|min:1|max:12',
+            'year' => 'required|integer|min:2020',
+        ]);
+
+        // Get daily sales grouped by user_id and date
+        $dailySales = DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
+            ->whereMonth('sales.sale_date', $validated['month'])
+            ->whereYear('sales.sale_date', $validated['year'])
+            ->select(
+                'sales.user_id',
+                DB::raw('DATE(sales.sale_date) as sale_date'),
+                DB::raw('SUM(sale_items.quantity) as daily_quantity')
+            )
+            ->groupBy('sales.user_id', DB::raw('DATE(sales.sale_date)'))
+            ->get();
+
+        // Calculate running total and incentive per day
+        $result = [];
+        $userTotals = [];
+
+        foreach ($dailySales as $row) {
+            $userId = $row->user_id;
+            $date = $row->sale_date;
+            $dailyQty = (int) $row->daily_quantity;
+
+            // Track running total per user
+            if (!isset($userTotals[$userId])) {
+                $userTotals[$userId] = 0;
+            }
+            $userTotals[$userId] += $dailyQty;
+
+            // Calculate incentive based on running total (every 40 = ₱100)
+            $incentiveAmount = floor($userTotals[$userId] / 40) * 100;
+
+            $result[$userId][$date] = [
+                'date' => $date,
+                'daily_quantity' => $dailyQty,
+                'running_total' => $userTotals[$userId],
+                'incentive_amount' => $incentiveAmount,
+            ];
+        }
+
+        return response()->json($result);
+    }
+
     public function getSalesSummary(Request $request)
     {
         $validated = $request->validate([

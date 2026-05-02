@@ -51,7 +51,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/attendance/{id}/time-out', [AttendanceController::class, 'timeOut']);
     Route::get('/attendance/payroll/report', [AttendanceController::class, 'getPayroll']);
     
-    // Sales
-    Route::apiResource('/sales', SaleController::class);
+    // Sales - Custom routes MUST come before apiResource
+    Route::get('/sales/product-incentives', [SaleController::class, 'getProductIncentives']);
+    Route::get('/sales/product-incentives/daily', [SaleController::class, 'getDailyProductIncentives']);
     Route::get('/sales/summary/overview', [SaleController::class, 'getSalesSummary']);
+    Route::apiResource('sales', SaleController::class);
 });
