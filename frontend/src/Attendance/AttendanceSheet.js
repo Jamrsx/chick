@@ -15,6 +15,25 @@ const { Option } = Select;
 
 const DAILY_RECORDS_PAGE_SIZE = 8;
 
+/** Monthly gross salary basis — government contributions (Philippines payroll style). */
+const SSS_MONTHLY_RATE = 0.045;
+const PHILHEALTH_MONTHLY_RATE = 0.025;
+const PAGIBIG_MONTHLY_RATE = 0.02;
+
+function roundMoney(value) {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+/** Monthly peso amounts stored in `staff_deductions` (same basis as backend ÷22 for daily reports). */
+function computeGovernmentDeductionsFromMonthlyGross(monthlyGross) {
+  const g = Number(monthlyGross) || 0;
+  return {
+    sss: roundMoney(g * SSS_MONTHLY_RATE),
+    philhealth: roundMoney(g * PHILHEALTH_MONTHLY_RATE),
+    pagibig: roundMoney(g * PAGIBIG_MONTHLY_RATE),
+  };
+}
+
 function AttendanceAdmin() {
   const [attendanceData, setAttendanceData] = useState([]);
   const [selectedDate, setSelectedDate] = useState(
@@ -254,11 +273,12 @@ function AttendanceAdmin() {
         const deductionsRes = await api.get(`/staff/${record.userId}/deductions/${monthNum}/${yearNum}`);
         console.log(`[LOAD DEDUCTIONS] ${staffName}:`, deductionsRes.data);
         newDeductions[staffName] = {
-          sss: deductionsRes.data.sss || 0,
-          philhealth: deductionsRes.data.philhealth || 0,
-          pagibig: deductionsRes.data.pagibig || 0,
-          cashAdvance: deductionsRes.data.cash_advance || 0,
-          otherDeductions: deductionsRes.data.other_deductions || 0,
+          deductionRecordExists: deductionsRes.data.deduction_record_exists === true,
+          sss: toNumber(deductionsRes.data.sss),
+          philhealth: toNumber(deductionsRes.data.philhealth),
+          pagibig: toNumber(deductionsRes.data.pagibig),
+          cashAdvance: toNumber(deductionsRes.data.cash_advance),
+          otherDeductions: toNumber(deductionsRes.data.other_deductions),
         };
         
         // Fetch incentives
@@ -275,6 +295,7 @@ function AttendanceAdmin() {
         console.error(`Error loading deductions/incentives for ${staffName}:`, error);
         // Set defaults if API fails
         newDeductions[staffName] = {
+          deductionRecordExists: false,
           sss: 0,
           philhealth: 0,
           pagibig: 0,
@@ -305,6 +326,21 @@ function AttendanceAdmin() {
   useEffect(() => {
     setDailyRecordsPageByStaff({});
   }, [selectedMonth]);
+
+  useEffect(() => {
+    if (!showDeductionsModal || !selectedStaff) return;
+    const staffName = selectedStaff.staffName;
+    const gross = selectedStaff.monthlySummary?.totalGrossPay ?? 0;
+    const gov = computeGovernmentDeductionsFromMonthlyGross(gross);
+    form.setFieldsValue({
+      sss: gov.sss,
+      philhealth: gov.philhealth,
+      pagibig: gov.pagibig,
+      cashAdvance: deductions[staffName]?.cashAdvance ?? 0,
+      perfectAttendance: incentives[staffName]?.perfectAttendance ?? false,
+      commission: incentives[staffName]?.commission ?? 0,
+    });
+  }, [showDeductionsModal, selectedStaff, deductions, incentives, form]);
 
   const formatPHTimeForAPI = (date = new Date()) => {
     const utc = date.getTime() + date.getTimezoneOffset() * 60000;
@@ -385,28 +421,24 @@ function AttendanceAdmin() {
   };
 
   const calculateDeductions = (staffName, employeeMonthlySummary = null) => {
-    const staffDeductions = deductions[staffName] || {};
-    
-    let totalDeductions = 0;
+    if (!employeeMonthlySummary) return 0;
 
-    // If we have monthly summary data, calculate deductions based on daily amounts from database
-    if (employeeMonthlySummary) {
-      const daysPresent = employeeMonthlySummary.daysPresent;
-      
-      // Use daily deduction amounts from database and multiply by days present
-      if (daysPresent > 0 && hasSavedValues(staffDeductions)) {
-        totalDeductions += (staffDeductions.sss || 0) * daysPresent; // Daily SSS × days present
-        totalDeductions += (staffDeductions.philhealth || 0) * daysPresent; // Daily PhilHealth × days present
-        totalDeductions += (staffDeductions.pagibig || 0) * daysPresent; // Daily Pag-IBIG × days present
-        totalDeductions += staffDeductions.cashAdvance || 0; // Cash advance is already monthly amount
-        totalDeductions += staffDeductions.otherDeductions || 0;
-      }
-    } else {
-      // Fallback to daily calculation for individual records (only used when no monthly data available)
-      console.warn('Using daily deduction calculation - this should not happen in monthly system');
+    const staffDeductions = deductions[staffName] || {};
+
+    if (!staffDeductions.deductionRecordExists) {
+      return 0;
     }
 
-    return totalDeductions;
+    const monthlyGross = employeeMonthlySummary.totalGrossPay || 0;
+    const gov = computeGovernmentDeductionsFromMonthlyGross(monthlyGross);
+
+    return (
+      gov.sss +
+      gov.philhealth +
+      gov.pagibig +
+      (staffDeductions.cashAdvance || 0) +
+      (staffDeductions.otherDeductions || 0)
+    );
   };
 
   // Incentives calculation with commission
@@ -563,6 +595,9 @@ function AttendanceAdmin() {
   const generateMonthlyPayrollSlip = (employee) => {
     const staffName = employee.staffName;
     const staffDeductions = deductions[staffName] || {};
+    const govDeductions = staffDeductions.deductionRecordExists
+      ? computeGovernmentDeductionsFromMonthlyGross(employee.monthlySummary.totalGrossPay)
+      : { sss: 0, philhealth: 0, pagibig: 0 };
     const staffIncentives = incentives[staffName] || {};
     const [year, month] = selectedMonth.split('-');
     
@@ -614,26 +649,26 @@ function AttendanceAdmin() {
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;">Basic Pay (${employee.monthlySummary.daysPresent} days)</td>
               <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(employee.monthlySummary.totalGrossPay)}</td>
-              <td style="padding: 8px; border: 1px solid #ddd;">SSS</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.sss || 0)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">SSS (4.5%)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(govDeductions.sss)}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;">Incentives</td>
               <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(employee.monthlySummary.totalIncentives)}</td>
-              <td style="padding: 8px; border: 1px solid #ddd;">PhilHealth</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.philhealth || 0)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">PhilHealth (2.5%)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(govDeductions.philhealth)}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #;"></td>
               <td style="padding: 8px; border: 1px solid #;"></td>
-              <td style="padding: 8px; border: 1px solid #ddd;">Pag-IBIG</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.pagibig || 0)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">Pag-IBIG (2%)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(govDeductions.pagibig)}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #;"></td>
               <td style="padding: 8px; border: 1px solid #;"></td>
               <td style="padding: 8px; border: 1px solid #ddd;">Cash Advance</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.cashAdvance || 0)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.deductionRecordExists ? (staffDeductions.cashAdvance || 0) : 0)}</td>
             </tr>
           </tbody>
           <tfoot>
@@ -962,6 +997,7 @@ function AttendanceAdmin() {
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">DAYS PRESENT</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">DAYS LATE</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY GROSS</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">DEDUCTIONS</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY NET</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">PROJECTED</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">ACTIONS</th>
@@ -970,7 +1006,7 @@ function AttendanceAdmin() {
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-12">
+                    <td colSpan={9} className="text-center py-12">
                       <div className="flex justify-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                       </div>
@@ -979,7 +1015,7 @@ function AttendanceAdmin() {
                   </tr>
                 ) : filteredMonthlyPayroll.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="text-center py-12 text-gray-500">
+                    <td colSpan={9} className="text-center py-12 text-gray-500">
                       No attendance records found for this month.
                     </td>
                   </tr>
@@ -1007,6 +1043,13 @@ function AttendanceAdmin() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-green-600 font-medium text-right">{formatCurrency(employee.monthlySummary.totalGrossPay)}</td>
+                        <td className="px-4 py-3 text-right">
+                          {employee.monthlySummary.totalDeductions > 0 ? (
+                            <span className="text-red-600 font-medium">{formatCurrency(employee.monthlySummary.totalDeductions)}</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="px-4 py-3 text-blue-600 font-bold text-right">{formatCurrency(employee.monthlySummary.totalNetPay)}</td>
                         <td className="px-4 py-3 text-purple-600 font-medium text-right">
                           <div>{formatCurrency(employee.monthlySummary.projectedMonthlyNet)}</div>
@@ -1020,18 +1063,6 @@ function AttendanceAdmin() {
                               onClick={() => {
                                 setSelectedStaff(employee);
                                 setShowDeductionsModal(true);
-                                
-                                const staffName = employee.staffName;
-                                
-                                // Use monthly deduction amounts from database directly
-                                form.setFieldsValue({
-                                  sss: deductions[staffName]?.sss || 0,
-                                  philhealth: deductions[staffName]?.philhealth || 0,
-                                  pagibig: deductions[staffName]?.pagibig || 0,
-                                  cashAdvance: deductions[staffName]?.cashAdvance || 0,
-                                  perfectAttendance: incentives[staffName]?.perfectAttendance || false,
-                                  commission: incentives[staffName]?.commission || 0,
-                                });
                               }}
                             >
                               Edit Deductions
@@ -1071,6 +1102,7 @@ function AttendanceAdmin() {
                                 <td className="px-4 py-2 text-xs text-green-600 text-right">
                                   {formatCurrency(record.dailyEarnings)}
                                 </td>
+                                <td className="px-4 py-2 text-xs text-gray-400 text-right">—</td>
                                 <td className="px-4 py-2 text-xs text-blue-600 text-right">
                                   {formatCurrency(record.netPay)}
                                 </td>
@@ -1081,7 +1113,7 @@ function AttendanceAdmin() {
                             ))}
                             {employee.payrollRecords.length > DAILY_RECORDS_PAGE_SIZE && (
                               <tr className="bg-gray-50 border-l-4 border-blue-200">
-                                <td colSpan={8} className="px-4 py-3">
+                                <td colSpan={9} className="px-4 py-3">
                                   <div className="flex justify-end">
                                     <Pagination
                                       size="small"
@@ -1115,6 +1147,7 @@ function AttendanceAdmin() {
                   <tr>
                     <td colSpan={4} className="px-4 py-3 text-right font-semibold text-gray-700">TOTAL:</td>
                     <td className="px-4 py-3 font-semibold text-green-600 text-right">{formatCurrency(overallTotalGross)}</td>
+                    <td className="px-4 py-3 font-semibold text-red-600 text-right">{formatCurrency(overallTotalDeductions)}</td>
                     <td className="px-4 py-3 font-semibold text-blue-600 text-right">{formatCurrency(overallTotalNet)}</td>
                     <td className="px-4 py-3 font-semibold text-purple-600 text-right">{formatCurrency(overallTotalProjected)}</td>
                     <td></td>
@@ -1216,31 +1249,33 @@ function AttendanceAdmin() {
         footer={null}
         width={500}
       >
-        <Form form={form} layout="vertical" initialValues={{
-          sss: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.sss || 0,
-          philhealth: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.philhealth || 0,
-          pagibig: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.pagibig || 0,
-          cashAdvance: deductions[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.cashAdvance || 0,
-          perfectAttendance: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.perfectAttendance || false,
-          commission: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.commission || 0,
-        }}>
-          <Divider orientation="left" className="!text-sm">Daily Deductions</Divider>
+        <Form form={form} layout="vertical">
+          <p className="text-xs text-gray-500 mb-2">
+            Monthly gross for this period:{" "}
+            <strong>{formatCurrency(selectedStaff?.monthlySummary?.totalGrossPay ?? 0)}</strong>. SSS (4.5%),
+            PhilHealth (2.5%), and Pag-IBIG (2%) are computed from this gross and stored for the selected month when you save.
+          </p>
+          <Divider orientation="left" className="!text-sm">
+            Monthly deductions
+          </Divider>
           <div className="grid grid-cols-2 gap-3">
-            <Form.Item name="sss" label="SSS (₱20.25/day)">
-              <InputNumber prefix="₱" className="w-full" min={0} disabled />
+            <Form.Item name="sss" label="SSS (4.5% of monthly gross)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled precision={2} />
             </Form.Item>
-            <Form.Item name="philhealth" label="PhilHealth (₱11.25/day)">
-              <InputNumber prefix="₱" className="w-full" min={0} disabled />
+            <Form.Item name="philhealth" label="PhilHealth (2.5% of monthly gross)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled precision={2} />
             </Form.Item>
-            <Form.Item name="pagibig" label="Pag-IBIG (₱9.00/day)">
-              <InputNumber prefix="₱" className="w-full" min={0} disabled />
+            <Form.Item name="pagibig" label="Pag-IBIG (2% of monthly gross)">
+              <InputNumber prefix="₱" className="w-full" min={0} disabled precision={2} />
             </Form.Item>
-            <Form.Item name="cashAdvance" label="Cash Advance (Monthly)">
-              <InputNumber prefix="₱" className="w-full" min={0} />
+            <Form.Item name="cashAdvance" label="Cash Advance (monthly)">
+              <InputNumber prefix="₱" className="w-full" min={0} precision={2} />
             </Form.Item>
           </div>
 
-          <Divider orientation="left" className="!text-sm">Incentives</Divider>
+          <Divider orientation="left" className="!text-sm">
+            Incentives
+          </Divider>
           <div className="grid grid-cols-2 gap-3">
             <Form.Item name="perfectAttendance" label="Perfect Attendance">
               <Select>
@@ -1248,73 +1283,59 @@ function AttendanceAdmin() {
                 <Option value={false}>No</Option>
               </Select>
             </Form.Item>
-            <Form.Item name="commission" label="Sales Commission">
-              <InputNumber prefix="₱" className="w-full" min={0} />
+            <Form.Item name="commission" label="Sales Commission (monthly)">
+              <InputNumber prefix="₱" className="w-full" min={0} precision={2} />
             </Form.Item>
           </div>
 
           <div className="flex justify-end gap-3 mt-4">
             <Button onClick={() => setShowDeductionsModal(false)}>Cancel</Button>
             <Button type="primary" onClick={async () => {
-              const staffName = `${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`;
+              const staffName = (selectedStaff?.staffName || `${selectedStaff?.user?.firstname || ""} ${selectedStaff?.user?.lastname || ""}`).trim();
               const values = form.getFieldsValue();
               const userId = selectedStaff?.userId;
-              const dailyRate = selectedStaff?.dailyRate || 0;
-              
-              console.log('[DEDUCTIONS MODAL] Selected staff:', selectedStaff);
-              console.log('[DEDUCTIONS MODAL] Staff name:', staffName);
-              console.log('[DEDUCTIONS MODAL] User ID:', userId);
-              console.log('[DEDUCTIONS MODAL] Selected date:', selectedDate);
-              console.log('[DEDUCTIONS MODAL] Daily rate:', dailyRate);
-              
+
               if (!userId) {
-                console.error('[DEDUCTIONS MODAL] ERROR: Unable to determine staff ID. selectedStaff:', selectedStaff);
                 message.error("Unable to determine staff ID. Please check the staff record.");
                 return;
               }
-              
-              const [year, month] = selectedMonth.split('-');
-              const monthNum = parseInt(month);
-              const yearNum = parseInt(year);
-              
-              // Calculate daily government deductions based on daily rate
-              const dailySSS = dailyRate * 0.045; // 4.5% of daily rate
-              const dailyPhilHealth = dailyRate * 0.025; // 2.5% of daily rate
-              const dailyPagibig = dailyRate * 0.02; // 2% of daily rate
-              
+
+              const [, month] = selectedMonth.split("-");
+              const monthNum = parseInt(month, 10);
+              const yearNum = parseInt(selectedMonth.split("-")[0], 10);
+
+              const monthlyGross = selectedStaff?.monthlySummary?.totalGrossPay ?? 0;
+              const gov = computeGovernmentDeductionsFromMonthlyGross(monthlyGross);
+
               try {
-                // Save daily deductions to API
                 await api.post(`/staff/${userId}/deductions`, {
-                  sss: dailySSS,
-                  philhealth: dailyPhilHealth,
-                  pagibig: dailyPagibig,
+                  sss: gov.sss,
+                  philhealth: gov.philhealth,
+                  pagibig: gov.pagibig,
                   cash_advance: values.cashAdvance || 0,
                   other_deductions: 0,
                   month: monthNum,
                   year: yearNum,
                 });
-                
-                // Save incentives to API
+
                 await api.post(`/staff/${userId}/incentives`, {
                   perfect_attendance: values.perfectAttendance || false,
                   commission: values.commission || 0,
                   other_incentives: 0,
-                  chicken_sales_incentive: 0,
-                  chickens_sold: 0,
                   month: monthNum,
                   year: yearNum,
                 });
-                
-                // Update local state with daily deduction values
-                setDeductions(prev => ({
+
+                setDeductions((prev) => ({
                   ...prev,
                   [staffName]: {
-                    sss: dailySSS,
-                    philhealth: dailyPhilHealth,
-                    pagibig: dailyPagibig,
+                    deductionRecordExists: true,
+                    sss: gov.sss,
+                    philhealth: gov.philhealth,
+                    pagibig: gov.pagibig,
                     cashAdvance: values.cashAdvance || 0,
                     otherDeductions: 0,
-                  }
+                  },
                 }));
                 
                 setIncentives(prev => ({

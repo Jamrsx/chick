@@ -26,6 +26,7 @@ class DeductionIncentiveController extends Controller
             if (!$deduction) {
                 \Log::info('[DEDUCTIONS] No existing deductions found, returning defaults');
                 return response()->json([
+                    'deduction_record_exists' => false,
                     'sss' => 0,
                     'philhealth' => 0,
                     'pagibig' => 0,
@@ -35,7 +36,10 @@ class DeductionIncentiveController extends Controller
             }
 
             \Log::info('[DEDUCTIONS] Found existing deductions', ['deduction' => $deduction]);
-            return response()->json($deduction);
+            $payload = $deduction->toArray();
+            $payload['deduction_record_exists'] = true;
+
+            return response()->json($payload);
         } catch (\Exception $e) {
             \Log::error('[DEDUCTIONS] Failed to fetch deductions', [
                 'user_id' => $userId,
