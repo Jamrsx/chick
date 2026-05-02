@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Tag, Button, Modal, Form, InputNumber, Select, message, Divider, Radio, Space, DatePicker as AntDatePicker } from "antd";
+import { Tag, Button, Modal, Form, InputNumber, Select, message, Divider, Radio, Space, DatePicker as AntDatePicker, Pagination } from "antd";
 import {  
   SearchOutlined,
   PrinterOutlined,
@@ -13,10 +13,15 @@ import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 const { Option } = Select;
 
+const DAILY_RECORDS_PAGE_SIZE = 8;
+
 function AttendanceAdmin() {
   const [attendanceData, setAttendanceData] = useState([]);
   const [selectedDate, setSelectedDate] = useState(
     dayjs().format("YYYY-MM-DD")
+  );
+  const [selectedMonth, setSelectedMonth] = useState(
+    dayjs().format("YYYY-MM")
   );
   const [currentTime, setCurrentTime] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
@@ -30,7 +35,20 @@ function AttendanceAdmin() {
   const [selectedStaffForPrint, setSelectedStaffForPrint] = useState([]);
   const [attendanceActionLoading, setAttendanceActionLoading] = useState(false);
   const [activeAttendanceId, setActiveAttendanceId] = useState(null);
+  /** Per-staff current page for daily detail rows (key: userId or staff name fallback). */
+  const [dailyRecordsPageByStaff, setDailyRecordsPageByStaff] = useState({});
   const [form] = Form.useForm();
+
+  const dailyRecordsStaffKey = (employee) =>
+    employee.userId != null ? String(employee.userId) : `name:${employee.staffName}`;
+
+  const getDailyRecordsPage = (employee) => {
+    const key = dailyRecordsStaffKey(employee);
+    const total = employee.payrollRecords?.length ?? 0;
+    const totalPages = Math.max(1, Math.ceil(total / DAILY_RECORDS_PAGE_SIZE));
+    const stored = dailyRecordsPageByStaff[key] ?? 1;
+    return Math.min(Math.max(1, stored), totalPages);
+  };
 
   const getStaffDailyRate = (staffName) => {
     const record = attendanceData.find((r) => {
@@ -105,16 +123,41 @@ function AttendanceAdmin() {
     return `${hours}:${minutesStr} ${ampm}`;
   };
 
-  // Load attendance data
+  // Load attendance data for the entire month by fetching daily data
   async function loadAttendanceData(forceRefresh = true) {
     setIsLoading(true);
     try {
-      // Always fetch fresh data from backend (bypass cache)
-      const { data } = await api.get("/attendance/payroll/report", {
-        params: { date: selectedDate },
-      });
+      const [year, month] = selectedMonth.split('-');
+      const yearNum = parseInt(year);
+      const monthNum = parseInt(month);
       
-      const mapped = (data || []).map((record, index) => {
+      // Get all days in the selected month
+      const daysInMonth = dayjs(selectedMonth).daysInMonth();
+      const allAttendanceData = [];
+      
+      // Fetch attendance data for each day in the month
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dateStr = `${year}-${month.padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+        try {
+          const { data } = await api.get("/attendance/payroll/report", {
+            params: { date: dateStr },
+          });
+          
+          if (data && data.length > 0) {
+            // Ensure each record has the correct date
+            const recordsWithDate = data.map(record => ({
+              ...record,
+              date: record.date || dateStr // Use the date we're fetching for
+            }));
+            allAttendanceData.push(...recordsWithDate);
+          }
+        } catch (error) {
+          console.warn(`No attendance data for ${dateStr}:`, error.message);
+          // Continue with next day even if current day has no data
+        }
+      }
+      
+      const mapped = (allAttendanceData || []).map((record, index) => {
         const [firstname, ...lastParts] = (record.staff_name || "").split(" ");
         const fallbackUser = {
           firstname: firstname || "",
@@ -157,6 +200,7 @@ function AttendanceAdmin() {
             id: finalBranchId 
           },
           branchId: finalBranchId,
+          date: record.date,
           time_in_raw: record.time_in,
           time_out_raw: record.time_out,
           time_in: formatTimeForDisplay(record.time_in),
@@ -188,23 +232,26 @@ function AttendanceAdmin() {
 
   // Load deductions and incentives from database
   async function loadDeductionsAndIncentives(attendanceRecords) {
-    const dateObj = new Date(selectedDate);
-    const month = dateObj.getMonth() + 1;
-    const year = dateObj.getFullYear();
+    const [year, month] = selectedMonth.split('-');
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
     
-    console.log('[LOAD DEDUCTIONS/INCENTIVES] Loading for date:', selectedDate, 'month:', month, 'year:', year);
+    console.log('[LOAD DEDUCTIONS/INCENTIVES] Loading for month:', selectedMonth, 'month:', monthNum, 'year:', yearNum);
     
     const newDeductions = {};
     const newIncentives = {};
     
-    for (const record of attendanceRecords) {
+    // Get unique staff members from attendance records
+    const uniqueStaff = [...new Map(attendanceRecords.map(record => [record.userId, record])).values()];
+    
+    for (const record of uniqueStaff) {
       if (!record.userId) continue;
       
       const staffName = `${record.user.firstname} ${record.user.lastname}`;
       
       try {
         // Fetch deductions
-        const deductionsRes = await api.get(`/staff/${record.userId}/deductions/${month}/${year}`);
+        const deductionsRes = await api.get(`/staff/${record.userId}/deductions/${monthNum}/${yearNum}`);
         console.log(`[LOAD DEDUCTIONS] ${staffName}:`, deductionsRes.data);
         newDeductions[staffName] = {
           sss: deductionsRes.data.sss || 0,
@@ -215,7 +262,7 @@ function AttendanceAdmin() {
         };
         
         // Fetch incentives
-        const incentivesRes = await api.get(`/staff/${record.userId}/incentives/${month}/${year}`);
+        const incentivesRes = await api.get(`/staff/${record.userId}/incentives/${monthNum}/${yearNum}`);
         console.log(`[LOAD INCENTIVES] ${staffName}:`, incentivesRes.data);
         newIncentives[staffName] = {
           perfectAttendance: incentivesRes.data.perfect_attendance || false,
@@ -253,7 +300,11 @@ function AttendanceAdmin() {
 
   useEffect(() => {
     loadAttendanceData();
-  }, [selectedDate]);
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    setDailyRecordsPageByStaff({});
+  }, [selectedMonth]);
 
   const formatPHTimeForAPI = (date = new Date()) => {
     const utc = date.getTime() + date.getTimezoneOffset() * 60000;
@@ -333,32 +384,26 @@ function AttendanceAdmin() {
     return earnings;
   };
 
-  const calculateDeductions = (staffName, record) => {
+  const calculateDeductions = (staffName, employeeMonthlySummary = null) => {
     const staffDeductions = deductions[staffName] || {};
-    const dailyRate = record.dailyRate || 0;
     
     let totalDeductions = 0;
 
-    if (record.isLate && record.lateMinutes > 0) {
-      totalDeductions += record.lateMinutes * 5;
-    }
-    
-    // Only calculate deductions if there are database values
-    if (hasSavedValues(staffDeductions)) {
-      // Calculate standard government deductions as percentage of daily rate
-      if (dailyRate > 0) {
-        totalDeductions += dailyRate * 0.045; // SSS: 4.5%
-        totalDeductions += dailyRate * 0.025; // PhilHealth: 2.5%
-        totalDeductions += dailyRate * 0.02; // Pag-IBIG: 2%
-      }
+    // If we have monthly summary data, calculate deductions based on daily amounts from database
+    if (employeeMonthlySummary) {
+      const daysPresent = employeeMonthlySummary.daysPresent;
       
-      // Cash advance from database (monthly, so divide by 22 for daily)
-      if (staffDeductions.cashAdvance) totalDeductions += staffDeductions.cashAdvance / 22;
-    }
-    
-    // Fallback to backend API values if no database values
-    if (!hasSavedValues(staffDeductions) && record.deductionsApi !== null && record.deductionsApi !== undefined) {
-      return record.deductionsApi;
+      // Use daily deduction amounts from database and multiply by days present
+      if (daysPresent > 0 && hasSavedValues(staffDeductions)) {
+        totalDeductions += (staffDeductions.sss || 0) * daysPresent; // Daily SSS × days present
+        totalDeductions += (staffDeductions.philhealth || 0) * daysPresent; // Daily PhilHealth × days present
+        totalDeductions += (staffDeductions.pagibig || 0) * daysPresent; // Daily Pag-IBIG × days present
+        totalDeductions += staffDeductions.cashAdvance || 0; // Cash advance is already monthly amount
+        totalDeductions += staffDeductions.otherDeductions || 0;
+      }
+    } else {
+      // Fallback to daily calculation for individual records (only used when no monthly data available)
+      console.warn('Using daily deduction calculation - this should not happen in monthly system');
     }
 
     return totalDeductions;
@@ -398,53 +443,135 @@ function AttendanceAdmin() {
       return fullName.toLowerCase().includes(searchTerm.toLowerCase());
     });
 
-  // Calculate payroll records
-  const payrollRecords = filteredData.map(record => {
-    const staffName = `${record.user.firstname} ${record.user.lastname}`;
-    const dailyRate = record.dailyRate || getStaffDailyRate(staffName);
-    const dailyEarnings = calculateDailyEarnings(record);
-    const deductionsAmt = calculateDeductions(staffName, record);
-    const incentivesAmt = calculateIncentives(staffName, record);
-    const netPay = dailyEarnings - deductionsAmt + incentivesAmt;
-    const { hours, minutes, totalHours, isValid } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
-    
-    return {
-      ...record,
-      staffName,
-      dailyRate,
-      dailyEarnings,
-      deductionsAmt,
-      incentivesAmt,
-      netPay,
-      hoursWorked: (record.time_out_raw && isValid) ? `${hours}h ${minutes}m` : '-',
-      totalHours: totalHours || 0
-    };
+  // Calculate monthly payroll records grouped by employee
+  const calculateMonthlyPayroll = () => {
+    // Group attendance records by employee
+    const groupedByEmployee = attendanceData.reduce((acc, record) => {
+      const staffName = `${record.user.firstname} ${record.user.lastname}`;
+      if (!acc[staffName]) {
+        acc[staffName] = {
+          records: [],
+          staffName,
+          user: record.user,
+          userId: record.userId,
+          branch: record.branch,
+          dailyRate: record.dailyRate || 0
+        };
+      }
+      acc[staffName].records.push(record);
+      return acc;
+    }, {});
+
+    // Calculate monthly totals for each employee
+    return Object.values(groupedByEmployee).map(employee => {
+      let totalGrossPay = 0;
+      let totalDeductionsAmt = 0;
+      let totalIncentives = 0;
+      let totalNetPayAmt = 0;
+      let totalHoursWorked = 0;
+      let daysPresent = 0;
+      let daysLate = 0;
+      
+      const payrollRecords = employee.records.map(record => {
+        const staffName = employee.staffName;
+        const dailyEarnings = calculateDailyEarnings(record);
+        const incentivesAmt = calculateIncentives(staffName, record);
+        const { totalHours, isValid } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
+        
+        totalGrossPay += dailyEarnings;
+        totalIncentives += incentivesAmt;
+        totalHoursWorked += totalHours || 0;
+        daysPresent++;
+        if (record.isLate) daysLate++;
+        
+        return {
+          ...record,
+          staffName,
+          dailyEarnings,
+          incentivesAmt,
+          hoursWorked: (record.time_out_raw && isValid) ? `${Math.floor(totalHours)}h ${Math.round((totalHours % 1) * 60)}m` : '-',
+          totalHours: totalHours || 0
+        };
+      });
+
+      // Calculate monthly deductions based on monthly gross
+      const monthlySummaryData = {
+        totalGrossPay,
+        totalIncentives,
+        totalHoursWorked,
+        daysPresent,
+        daysLate
+      };
+      
+      const monthlyDeductions = calculateDeductions(employee.staffName, monthlySummaryData);
+      const monthlyNetPay = totalGrossPay - monthlyDeductions + totalIncentives;
+
+      // Calculate projected full month salary (using actual days in month)
+      const [year, month] = selectedMonth.split('-');
+      const daysInMonth = dayjs(selectedMonth).daysInMonth();
+      const averageDailyEarnings = daysPresent > 0 ? totalGrossPay / daysPresent : 0;
+      const projectedMonthlyGross = averageDailyEarnings * daysInMonth;
+      
+      // Calculate projected deductions based on projected monthly gross
+      const projectedMonthlySummaryData = {
+        totalGrossPay: projectedMonthlyGross,
+        totalIncentives: (totalIncentives / daysPresent) * daysInMonth
+      };
+      const projectedMonthlyDeductions = calculateDeductions(employee.staffName, projectedMonthlySummaryData);
+      const projectedMonthlyIncentives = (totalIncentives / daysPresent) * daysInMonth;
+      const projectedMonthlyNet = projectedMonthlyGross - projectedMonthlyDeductions + projectedMonthlyIncentives;
+
+      return {
+        ...employee,
+        payrollRecords,
+        monthlySummary: {
+          totalGrossPay,
+          totalDeductions: monthlyDeductions,
+          totalIncentives,
+          totalNetPay: monthlyNetPay,
+          totalHoursWorked,
+          daysPresent,
+          daysLate,
+          projectedMonthlyGross,
+          projectedMonthlyDeductions,
+          projectedMonthlyIncentives,
+          projectedMonthlyNet,
+          daysInMonth
+        }
+      };
+    });
+  };
+
+  const monthlyPayroll = calculateMonthlyPayroll();
+  const filteredMonthlyPayroll = monthlyPayroll.filter(employee => {
+    const staffName = employee.staffName;
+    return staffName.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
-  const totalGrossPay = payrollRecords.reduce((sum, r) => sum + (r.dailyEarnings || 0), 0);
-  const totalDeductions = payrollRecords.reduce((sum, r) => sum + (r.deductionsAmt || 0), 0);
-  const totalNetPay = payrollRecords.reduce((sum, r) => sum + (r.netPay || 0), 0);
+  // Calculate overall totals
+  const overallTotalGross = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalGrossPay, 0);
+  const overallTotalDeductions = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalDeductions, 0);
+  const overallTotalNet = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.totalNetPay, 0);
+  const overallTotalProjected = filteredMonthlyPayroll.reduce((sum, emp) => sum + emp.monthlySummary.projectedMonthlyNet, 0);
 
   const formatCurrency = (amount) => {
     if (!amount && amount !== 0) return '₱0.00';
     return `₱${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
   };
 
-  // Generate individual staff payroll slip
-  const generateIndividualPayrollSlip = (record) => {
-    const staffName = `${record.user.firstname} ${record.user.lastname}`;
-    const deductionsAmt = calculateDeductions(staffName, record);
-    const incentivesAmt = calculateIncentives(staffName, record);
-    const selectedDateObj = new Date(selectedDate);
+  // Generate monthly payroll slip
+  const generateMonthlyPayrollSlip = (employee) => {
+    const staffName = employee.staffName;
     const staffDeductions = deductions[staffName] || {};
-    const { hours, minutes } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
+    const staffIncentives = incentives[staffName] || {};
+    const [year, month] = selectedMonth.split('-');
     
     return `
       <div style="margin-bottom: 40px; page-break-after: always;">
         <div style="text-align: center; margin-bottom: 20px;">
           <div style="font-size: 16px; font-weight: bold;">NEW MOON</div>
-          <div style="font-size: 12px; margin-top: 5px;">PAYROLL SLIP</div>
-          <div style="font-size: 11px; margin-top: 3px; color: #666;">${selectedDateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+          <div style="font-size: 12px; margin-top: 5px;">MONTHLY PAYROLL REPORT</div>
+          <div style="font-size: 11px; margin-top: 3px; color: #666;">${dayjs(selectedMonth).format('MMMM YYYY')}</div>
         </div>
         
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
@@ -454,27 +581,23 @@ function AttendanceAdmin() {
           </tr>
           <tr>
             <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Branch:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${record.branch?.name || 'N/A'}</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${employee.branch?.name || 'N/A'}</td>
           </tr>
           <tr>
             <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Pay Period:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${selectedDateObj.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${dayjs(selectedMonth).format('MMMM YYYY')}</td>
           </tr>
           <tr>
             <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Daily Rate:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${formatCurrency(record.dailyRate)}</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${formatCurrency(employee.dailyRate)}</td>
           </tr>
           <tr>
-            <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Time In:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${record.time_in || '-'}</td>
+            <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Days Present:</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${employee.monthlySummary.daysPresent} days</td>
           </tr>
           <tr>
-            <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Time Out:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${record.time_out || 'Not yet'}</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Hours Worked:</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">${record.time_out ? `${hours}h ${minutes}m` : '-'}</td>
+            <td style="padding: 8px; border: 1px solid #ddd; background: #f5f5f5;">Days Late:</td>
+            <td style="padding: 8px; border: 1px solid #ddd;">${employee.monthlySummary.daysLate} days</td>
           </tr>
         </table>
 
@@ -489,40 +612,44 @@ function AttendanceAdmin() {
           </thead>
           <tbody>
             <tr>
-              <td style="padding: 8px; border: 1px solid #ddd;">Basic Pay</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(record.dailyEarnings)}</td>
-              <td style="padding: 8px; border: 1px solid #ddd;">Late/Tardiness</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${record.isLate ? formatCurrency(record.lateMinutes * 5) : '₱0.00'}</td>
-            </tr>
-            <tr>
-              <td style="padding: 8px; border: 1px solid #ddd;">Overtime Pay</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${record.totalHours > 8 ? formatCurrency((record.totalHours - 8) * (record.dailyRate / 8) * 1.25) : '₱0.00'}</td>
+              <td style="padding: 8px; border: 1px solid #ddd;">Basic Pay (${employee.monthlySummary.daysPresent} days)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(employee.monthlySummary.totalGrossPay)}</td>
               <td style="padding: 8px; border: 1px solid #ddd;">SSS</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency((staffDeductions.sss || 0) / 22)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.sss || 0)}</td>
             </tr>
             <tr>
               <td style="padding: 8px; border: 1px solid #ddd;">Incentives</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(incentivesAmt)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(employee.monthlySummary.totalIncentives)}</td>
               <td style="padding: 8px; border: 1px solid #ddd;">PhilHealth</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency((staffDeductions.philhealth || 0) / 22)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.philhealth || 0)}</td>
             </tr>
             <tr>
-              <td style="padding: 8px; border: 1px solid #ddd;"></td>
-              <td style="padding: 8px; border: 1px solid #ddd;"></td>
+              <td style="padding: 8px; border: 1px solid #;"></td>
+              <td style="padding: 8px; border: 1px solid #;"></td>
               <td style="padding: 8px; border: 1px solid #ddd;">Pag-IBIG</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency((staffDeductions.pagibig || 0) / 22)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.pagibig || 0)}</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; border: 1px solid #;"></td>
+              <td style="padding: 8px; border: 1px solid #;"></td>
+              <td style="padding: 8px; border: 1px solid #ddd;">Cash Advance</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${formatCurrency(staffDeductions.cashAdvance || 0)}</td>
             </tr>
           </tbody>
           <tfoot>
             <tr style="background: #e8f5e9;">
               <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">TOTAL EARNINGS</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(record.dailyEarnings + incentivesAmt)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(employee.monthlySummary.totalGrossPay + employee.monthlySummary.totalIncentives)}</td>
               <td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">TOTAL DEDUCTIONS</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(deductionsAmt)}</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">${formatCurrency(employee.monthlySummary.totalDeductions)}</td>
             </tr>
             <tr style="background: #c8e6c9;">
-              <td colspan="3" style="padding: 8px; border: 1px solid #ddd; font-weight: bold; text-align: center;">NET PAY</td>
-              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 16px;">${formatCurrency(record.netPay)}</td>
+              <td colspan="3" style="padding: 8px; border: 1px solid #ddd; font-weight: bold; text-align: center;">MONTHLY NET PAY</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 16px;">${formatCurrency(employee.monthlySummary.totalNetPay)}</td>
+            </tr>
+            <tr style="background: #f0f4ff;">
+              <td colspan="3" style="padding: 8px; border: 1px solid #ddd; font-weight: bold; text-align: center;">PROJECTED ({employee.monthlySummary.daysInMonth} days)</td>
+              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold; font-size: 14px; color: #6366f1;">${formatCurrency(employee.monthlySummary.projectedMonthlyNet)}</td>
             </tr>
           </tfoot>
         </table>
@@ -549,9 +676,9 @@ function AttendanceAdmin() {
     `;
   };
 
-  // Generate complete payroll report
+  // Generate complete monthly payroll report
   const generateCompletePayrollReport = () => {
-    return payrollRecords.map(record => generateIndividualPayrollSlip(record)).join('');
+    return filteredMonthlyPayroll.map(employee => generateMonthlyPayrollSlip(employee)).join('');
   };
 
   const handlePrintPayroll = () => {
@@ -560,16 +687,16 @@ function AttendanceAdmin() {
     if (printType === "all") {
       htmlContent = generateCompletePayrollReport();
     } else {
-      const selectedRecords = payrollRecords.filter(r => 
-        selectedStaffForPrint.includes(r.staffName)
+      const selectedEmployees = filteredMonthlyPayroll.filter(emp => 
+        selectedStaffForPrint.includes(emp.staffName)
       );
       
-      if (selectedRecords.length === 0) {
+      if (selectedEmployees.length === 0) {
         message.warning("Please select at least one staff member to print");
         return;
       }
       
-      htmlContent = selectedRecords.map(record => generateIndividualPayrollSlip(record)).join('');
+      htmlContent = selectedEmployees.map(employee => generateMonthlyPayrollSlip(employee)).join('');
     }
     
     const printWindow = window.open('', '_blank');
@@ -727,7 +854,7 @@ function AttendanceAdmin() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="bg-gray-50" style={{ minHeight: '100vh', paddingBottom: '2rem', overflowY: 'auto' }}>
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 shadow-sm flex-shrink-0">
         <div className="flex items-center justify-between">
@@ -741,30 +868,34 @@ function AttendanceAdmin() {
               {currentTime.toLocaleTimeString('en-PH', { hour12: true, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </p>
             <p className="text-xs text-gray-400">
-              {new Date(selectedDate).toLocaleDateString('en-PH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+              {dayjs(selectedMonth).format('MMMM YYYY')}
             </p>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="max-w-7xl mx-auto px-6 py-6" style={{ minHeight: '120vh' }}>
         {/* Summary Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Staff</p>
-            <p className="text-2xl font-bold text-gray-800">{filteredData.length}</p>
+            <p className="text-2xl font-bold text-gray-800">{filteredMonthlyPayroll.length}</p>
           </div>
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Gross</p>
-            <p className="text-2xl font-bold text-green-600">{formatCurrency(totalGrossPay)}</p>
+            <p className="text-2xl font-bold text-green-600">{formatCurrency(overallTotalGross)}</p>
           </div> 
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Deductions</p>
-            <p className="text-2xl font-bold text-red-500">{formatCurrency(totalDeductions)}</p>
+            <p className="text-2xl font-bold text-red-500">{formatCurrency(overallTotalDeductions)}</p>
           </div>
           <div className="bg-white rounded-lg border border-gray-200 p-4">
             <p className="text-xs text-gray-500 uppercase tracking-wide">Total Net Pay</p>
-            <p className="text-2xl font-bold text-blue-600">{formatCurrency(totalNetPay)}</p>
+            <p className="text-2xl font-bold text-blue-600">{formatCurrency(overallTotalNet)}</p>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <p className="text-xs text-gray-500 uppercase tracking-wide">Projected Total</p>
+            <p className="text-2xl font-bold text-purple-600">{formatCurrency(overallTotalProjected)}</p>
           </div>
         </div>
 
@@ -773,15 +904,16 @@ function AttendanceAdmin() {
           <div className="flex flex-wrap gap-4 items-center justify-between">
             <div className="flex gap-4 items-center">
               <div>
-                <label className="text-xs text-gray-500 block mb-1">Select Date</label>
+                <label className="text-xs text-gray-500 block mb-1">Select Month</label>
                 <AntDatePicker
-                  value={dayjs(selectedDate)}
+                  value={dayjs(selectedMonth)}
                   onChange={(date) => {
                     if (date) {
-                      setSelectedDate(date.format("YYYY-MM-DD"));
+                      setSelectedMonth(date.format("YYYY-MM"));
                     }
                   }}
-                  format="YYYY-MM-DD"
+                  format="YYYY-MM"
+                  picker="month"
                   className="w-full"
                   size="middle"
                 />
@@ -819,131 +951,173 @@ function AttendanceAdmin() {
           </div>
         </div>
 
-        {/* Attendance Table */}
+        {/* Monthly Attendance Table */}
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">NO.</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">STAFF NAME</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">BRANCH</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">TIME IN</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">TIME OUT</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">HOURS</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">GROSS PAY</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">DEDUCTIONS</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">NET PAY</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">STATUS</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">ACTION</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">DAYS PRESENT</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">DAYS LATE</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY GROSS</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">MONTHLY NET</th>
+                  <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">PROJECTED</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {isLoading ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-12">
+                    <td colSpan={8} className="text-center py-12">
                       <div className="flex justify-center">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                       </div>
-                      <p className="text-gray-500 mt-2 text-sm">Loading...</p>
+                      <p className="text-gray-500 mt-2 text-sm">Loading monthly attendance...</p>
                     </td>
                   </tr>
-                ) : filteredData.length === 0 ? (
+                ) : filteredMonthlyPayroll.length === 0 ? (
                   <tr>
-                    <td colSpan={11} className="text-center py-12 text-gray-500">
-                      No attendance records found for this date.
+                    <td colSpan={8} className="text-center py-12 text-gray-500">
+                      No attendance records found for this month.
                     </td>
                   </tr>
                 ) : (
-                  filteredData.map((record, idx) => {
-                    const staffName = `${record.user.firstname} ${record.user.lastname}`;
-                    const earnings = calculateDailyEarnings(record);
-                    const deductionsAmt = calculateDeductions(staffName, record);
-                    const incentivesAmt = calculateIncentives(staffName, record);
-                    const net = earnings - deductionsAmt + incentivesAmt;
-                    const { hours, minutes, isValid } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
-                    
-                    return (
-                      <tr key={record.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-gray-500">{idx + 1}</td>
-                        <td className="px-4 py-3 font-medium text-gray-800">{staffName}</td>
-                        <td className="px-4 py-3 text-gray-600">{record.branch?.name || 'N/A'}</td>
-                        <td className="px-4 py-3 font-mono text-sm">{record.time_in || '-'}</td>
-                        <td className="px-4 py-3 font-mono text-sm">{record.time_out || '-'}</td>
-                        <td className="px-4 py-3">{record.time_out_raw && isValid ? `${hours}h ${minutes}m` : '-'}</td>
-                        <td className="px-4 py-3 text-green-600 font-medium">{formatCurrency(earnings)}</td>
-                        <td className="px-4 py-3 text-red-500">{formatCurrency(deductionsAmt)}</td>
-                        <td className="px-4 py-3 text-blue-600 font-bold">{formatCurrency(net)}</td>
+                  filteredMonthlyPayroll.map((employee, idx) => (
+                    <React.Fragment key={employee.userId}>
+                      <tr className="hover:bg-gray-50">
                         <td className="px-4 py-3">
-                          {record.time_in && record.time_out ? (
-                            <Tag color="green">Completed</Tag>
-                          ) : record.time_in ? (
-                            <Tag color="blue">On Duty</Tag>
-                          ) : <Tag color="default">-</Tag>}
+                          <div className="font-medium text-gray-800">{employee.staffName}</div>
+                          <div className="text-xs text-gray-500">Daily Rate: {formatCurrency(employee.dailyRate)}</div>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-3 text-gray-600">{employee.branch?.name || 'N/A'}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            {employee.monthlySummary.daysPresent}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {employee.monthlySummary.daysLate > 0 ? (
+                            <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                              {employee.monthlySummary.daysLate}
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-green-600 font-medium text-right">{formatCurrency(employee.monthlySummary.totalGrossPay)}</td>
+                        <td className="px-4 py-3 text-blue-600 font-bold text-right">{formatCurrency(employee.monthlySummary.totalNetPay)}</td>
+                        <td className="px-4 py-3 text-purple-600 font-medium text-right">
+                          <div>{formatCurrency(employee.monthlySummary.projectedMonthlyNet)}</div>
+                          <div className="text-xs text-gray-500">if {employee.monthlySummary.daysInMonth} days</div>
+                        </td>
+                        <td className="px-4 py-3 text-center">
                           <Space size="small">
-                            {!record.time_in ? (
-                              <Button
-                                type="primary"
-                                size="small"
-                                loading={attendanceActionLoading && activeAttendanceId === record.id}
-                                onClick={() => handleAttendanceTimeIn(record.id, staffName)}
-                              >
-                                Time In
-                              </Button>
-                            ) : !record.time_out ? (
-                              <Button
-                                type="default"
-                                size="small"
-                                loading={attendanceActionLoading && activeAttendanceId === record.id}
-                                onClick={() => handleAttendanceTimeOut(record.id, staffName)}
-                              >
-                                Time Out
-                              </Button>
-                            ) : null}
                             <Button 
                               type="link" 
                               size="small"
-                              icon={<EditOutlined />}
                               onClick={() => {
-                                setSelectedStaff(record);
+                                setSelectedStaff(employee);
                                 setShowDeductionsModal(true);
                                 
-                                // Set form values when opening modal
-                                const staffName = `${record.user.firstname} ${record.user.lastname}`;
-                                const dailyRate = record.dailyRate || 0;
+                                const staffName = employee.staffName;
                                 
-                                // Calculate daily deduction amounts (what will actually be deducted)
-                                const dailySSS = dailyRate * 0.045; // 4.5% of daily rate
-                                const dailyPhilHealth = dailyRate * 0.025; // 2.5% of daily rate
-                                const dailyPagibig = dailyRate * 0.02; // 2% of daily rate
-                                
+                                // Use monthly deduction amounts from database directly
                                 form.setFieldsValue({
-                                  sss: dailySSS,
-                                  philhealth: dailyPhilHealth,
-                                  pagibig: dailyPagibig,
+                                  sss: deductions[staffName]?.sss || 0,
+                                  philhealth: deductions[staffName]?.philhealth || 0,
+                                  pagibig: deductions[staffName]?.pagibig || 0,
                                   cashAdvance: deductions[staffName]?.cashAdvance || 0,
                                   perfectAttendance: incentives[staffName]?.perfectAttendance || false,
                                   commission: incentives[staffName]?.commission || 0,
                                 });
                               }}
-                            />
+                            >
+                              Edit Deductions
+                            </Button>
                           </Space>
                         </td>
                       </tr>
-                    );
-                  })
+                      
+                      {/* Daily attendance details (paginated) */}
+                      {(() => {
+                        const dailyPage = getDailyRecordsPage(employee);
+                        const start = (dailyPage - 1) * DAILY_RECORDS_PAGE_SIZE;
+                        const pageRecords = employee.payrollRecords.slice(
+                          start,
+                          start + DAILY_RECORDS_PAGE_SIZE
+                        );
+                        const staffKey = dailyRecordsStaffKey(employee);
+                        return (
+                          <>
+                            {pageRecords.map((record, recordIdx) => (
+                              <tr
+                                key={`${employee.userId}-${start + recordIdx}`}
+                                className="bg-gray-50 border-l-4 border-blue-200"
+                              >
+                                <td className="px-4 py-2 text-xs text-gray-600 pl-8">
+                                  {dayjs(record.date).format('MMM DD, YYYY')}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-gray-600">
+                                  {record.time_in} - {record.time_out}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-gray-600 text-center">
+                                  {record.hoursWorked}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-gray-600 text-center">
+                                  {record.isLate ? 'Late' : 'On Time'}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-green-600 text-right">
+                                  {formatCurrency(record.dailyEarnings)}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-blue-600 text-right">
+                                  {formatCurrency(record.netPay)}
+                                </td>
+                                <td className="px-4 py-2 text-xs text-gray-400 text-center" colSpan={2}>
+                                  Daily Record
+                                </td>
+                              </tr>
+                            ))}
+                            {employee.payrollRecords.length > DAILY_RECORDS_PAGE_SIZE && (
+                              <tr className="bg-gray-50 border-l-4 border-blue-200">
+                                <td colSpan={8} className="px-4 py-3">
+                                  <div className="flex justify-end">
+                                    <Pagination
+                                      size="small"
+                                      current={dailyPage}
+                                      pageSize={DAILY_RECORDS_PAGE_SIZE}
+                                      total={employee.payrollRecords.length}
+                                      onChange={(p) =>
+                                        setDailyRecordsPageByStaff((prev) => ({
+                                          ...prev,
+                                          [staffKey]: p,
+                                        }))
+                                      }
+                                      showSizeChanger={false}
+                                      showTotal={(total, range) =>
+                                        `${range[0]}–${range[1]} of ${total} days`
+                                      }
+                                    />
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </React.Fragment>
+                  ))
                 )}
               </tbody>
-              {filteredData.length > 0 && (
+              {filteredMonthlyPayroll.length > 0 && (
                 <tfoot className="bg-gray-50 border-t border-gray-200">
                   <tr>
-                    <td colSpan={6} className="px-4 py-3 text-right font-semibold text-gray-700">TOTAL:</td>
-                    <td className="px-4 py-3 font-semibold text-green-600">{formatCurrency(totalGrossPay)}</td>
-                    <td className="px-4 py-3 font-semibold text-red-500">{formatCurrency(totalDeductions)}</td>
-                    <td className="px-4 py-3 font-semibold text-blue-600">{formatCurrency(totalNetPay)}</td>
-                    <td colSpan={2}></td>
+                    <td colSpan={4} className="px-4 py-3 text-right font-semibold text-gray-700">TOTAL:</td>
+                    <td className="px-4 py-3 font-semibold text-green-600 text-right">{formatCurrency(overallTotalGross)}</td>
+                    <td className="px-4 py-3 font-semibold text-blue-600 text-right">{formatCurrency(overallTotalNet)}</td>
+                    <td className="px-4 py-3 font-semibold text-purple-600 text-right">{formatCurrency(overallTotalProjected)}</td>
+                    <td></td>
                   </tr>
                 </tfoot>
               )}
@@ -990,11 +1164,11 @@ function AttendanceAdmin() {
             >
               <Radio value="all">
                 <span className="font-medium">All Staff</span>
-                <p className="text-xs text-gray-500 ml-6">Print individual payroll slips for all staff members (each on separate page)</p>
+                <p className="text-xs text-gray-500 ml-6">Print monthly payroll slips for all staff members (each on separate page)</p>
               </Radio>
               <Radio value="individual">
                 <span className="font-medium">Individual Staff</span>
-                <p className="text-xs text-gray-500 ml-6">Print individual payroll slips for selected staff only</p>
+                <p className="text-xs text-gray-500 ml-6">Print monthly payroll slips for selected staff only</p>
               </Radio>
             </Radio.Group>
           </div>
@@ -1011,9 +1185,9 @@ function AttendanceAdmin() {
                 optionFilterProp="children"
                 showSearch
               >
-                {payrollRecords.map(record => (
-                  <Option key={record.staffName} value={record.staffName}>
-                    <UserOutlined className="mr-2" /> {record.staffName} - {record.branch?.name || 'N/A'}
+                {filteredMonthlyPayroll.map(employee => (
+                  <Option key={employee.staffName} value={employee.staffName}>
+                    <UserOutlined className="mr-2" /> {employee.staffName} - {employee.branch?.name || 'N/A'}
                   </Option>
                 ))}
               </Select>
@@ -1027,8 +1201,8 @@ function AttendanceAdmin() {
             <p className="text-xs text-blue-800">
               <strong>📄 Print Preview:</strong><br />
               {printType === "all" 
-                ? "The report will print individual payroll slips for ALL staff members. Each staff will have their own separate page."
-                : `You will get individual payroll slips for ${selectedStaffForPrint.length} selected staff member(s).`}
+                ? "The report will print monthly payroll slips for ALL staff members. Each staff will have their own separate page with monthly totals and projections."
+                : `You will get monthly payroll slips for ${selectedStaffForPrint.length} selected staff member(s) with their complete monthly attendance and salary details.`}
             </p>
           </div>
         </div>
@@ -1050,18 +1224,18 @@ function AttendanceAdmin() {
           perfectAttendance: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.perfectAttendance || false,
           commission: incentives[`${selectedStaff?.user?.firstname || ''} ${selectedStaff?.user?.lastname || ''}`]?.commission || 0,
         }}>
-          <Divider orientation="left" className="!text-sm">Monthly Deductions</Divider>
+          <Divider orientation="left" className="!text-sm">Daily Deductions</Divider>
           <div className="grid grid-cols-2 gap-3">
-            <Form.Item name="sss" label="SSS (4.5%)">
+            <Form.Item name="sss" label="SSS (₱20.25/day)">
               <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
-            <Form.Item name="philhealth" label="PhilHealth (2.5%)">
+            <Form.Item name="philhealth" label="PhilHealth (₱11.25/day)">
               <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
-            <Form.Item name="pagibig" label="Pag-IBIG (2%)">
+            <Form.Item name="pagibig" label="Pag-IBIG (₱9.00/day)">
               <InputNumber prefix="₱" className="w-full" min={0} disabled />
             </Form.Item>
-            <Form.Item name="cashAdvance" label="Cash Advance">
+            <Form.Item name="cashAdvance" label="Cash Advance (Monthly)">
               <InputNumber prefix="₱" className="w-full" min={0} />
             </Form.Item>
           </div>
@@ -1099,26 +1273,25 @@ function AttendanceAdmin() {
                 return;
               }
               
-              const dateObj = new Date(selectedDate);
-              const month = dateObj.getMonth() + 1;
-              const year = dateObj.getFullYear();
+              const [year, month] = selectedMonth.split('-');
+              const monthNum = parseInt(month);
+              const yearNum = parseInt(year);
               
-              // Calculate standard government deductions (always based on current daily rate)
-              const monthlyRate = dailyRate * 22;
-              const standardSSS = monthlyRate * 0.045; // 4.5%
-              const standardPhilHealth = monthlyRate * 0.025; // 2.5%
-              const standardPagibig = monthlyRate * 0.02; // 2%
+              // Calculate daily government deductions based on daily rate
+              const dailySSS = dailyRate * 0.045; // 4.5% of daily rate
+              const dailyPhilHealth = dailyRate * 0.025; // 2.5% of daily rate
+              const dailyPagibig = dailyRate * 0.02; // 2% of daily rate
               
               try {
-                // Save deductions to API (use calculated standard deductions)
+                // Save daily deductions to API
                 await api.post(`/staff/${userId}/deductions`, {
-                  sss: standardSSS,
-                  philhealth: standardPhilHealth,
-                  pagibig: standardPagibig,
+                  sss: dailySSS,
+                  philhealth: dailyPhilHealth,
+                  pagibig: dailyPagibig,
                   cash_advance: values.cashAdvance || 0,
                   other_deductions: 0,
-                  month: month,
-                  year: year,
+                  month: monthNum,
+                  year: yearNum,
                 });
                 
                 // Save incentives to API
@@ -1128,17 +1301,17 @@ function AttendanceAdmin() {
                   other_incentives: 0,
                   chicken_sales_incentive: 0,
                   chickens_sold: 0,
-                  month: month,
-                  year: year,
+                  month: monthNum,
+                  year: yearNum,
                 });
                 
-                // Update local state with calculated values
+                // Update local state with daily deduction values
                 setDeductions(prev => ({
                   ...prev,
                   [staffName]: {
-                    sss: standardSSS,
-                    philhealth: standardPhilHealth,
-                    pagibig: standardPagibig,
+                    sss: dailySSS,
+                    philhealth: dailyPhilHealth,
+                    pagibig: dailyPagibig,
                     cashAdvance: values.cashAdvance || 0,
                     otherDeductions: 0,
                   }
