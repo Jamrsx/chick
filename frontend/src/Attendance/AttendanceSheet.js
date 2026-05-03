@@ -518,21 +518,26 @@ function AttendanceAdmin() {
   };
 
   // Get total monthly sales incentive for a user
+  // Calculates sum of daily incentives (each day: floor(daily_qty/40) * 100)
   const getMonthlySalesIncentive = (userId) => {
     if (!userId) return { productsSold: 0, incentiveAmount: 0 };
     const userData = salesIncentives[String(userId)];
     if (!userData) return { productsSold: 0, incentiveAmount: 0 };
-    
-    // Get the last entry (highest running total) for the month
-    const dates = Object.keys(userData).sort();
-    if (dates.length === 0) return { productsSold: 0, incentiveAmount: 0 };
-    
-    const lastDate = dates[dates.length - 1];
-    const lastData = userData[lastDate];
-    
+
+    let totalProductsSold = 0;
+    let totalIncentive = 0;
+
+    // Sum up daily incentives based on daily quantity
+    Object.values(userData).forEach(dayData => {
+      const dailyQty = dayData?.daily_quantity || 0;
+      totalProductsSold += dailyQty;
+      // Calculate incentive for this day: every 40 products = ₱100
+      totalIncentive += Math.floor(dailyQty / 40) * 100;
+    });
+
     return {
-      productsSold: lastData?.running_total || 0,
-      incentiveAmount: lastData?.incentive_amount || 0,
+      productsSold: totalProductsSold,
+      incentiveAmount: totalIncentive,
     };
   };
 
@@ -1215,10 +1220,11 @@ function AttendanceAdmin() {
                                 <td className="px-4 py-2 text-xs text-right">
                                   {(() => {
                                     const dailySales = getDailySalesIncentive(employee.userId, record.date);
-                                    if (dailySales.dailyQuantity > 0) {
+                                    if (dailySales.dailyQuantity >= 40) {
+                                      const dailyIncentive = Math.floor(dailySales.dailyQuantity / 40) * 100;
                                       return (
                                         <span className="text-orange-600">
-                                          {formatCurrency(dailySales.incentiveAmount)}
+                                          {formatCurrency(dailyIncentive)}
                                           <span className="text-xs text-gray-500 ml-1">(+{dailySales.dailyQuantity})</span>
                                         </span>
                                       );
