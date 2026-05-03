@@ -74,8 +74,8 @@ class SaleController extends Controller
                 ];
             }
 
-            $tax = $subtotal * 0.12; // 12% VAT
-            $total = $subtotal + $tax;
+            $tax = 0; // No VAT
+            $total = $subtotal;
             $change = $validated['cash_collected'] - $total;
             $invoiceNumber = 'INV-' . date('Ymd') . '-' . str_pad(Sale::count() + 1, 4, '0', STR_PAD_LEFT);
 
