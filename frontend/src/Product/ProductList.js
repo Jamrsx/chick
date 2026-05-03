@@ -167,6 +167,40 @@ function ProductList() {
     product.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Group products by branch for display
+  const getBranchProductStocks = () => {
+    const branchMap = new Map();
+    
+    // Initialize all branches
+    branches.forEach(branch => {
+      branchMap.set(branch.id, {
+        branch,
+        stocks: []
+      });
+    });
+    
+    // Add product stocks to their respective branches
+    filteredProducts.forEach(product => {
+      if (product.product_stocks && product.product_stocks.length > 0) {
+        product.product_stocks.forEach(stock => {
+          if (branchMap.has(stock.branch_id)) {
+            branchMap.get(stock.branch_id).stocks.push({
+              ...stock,
+              product
+            });
+          }
+        });
+      }
+    });
+    
+    // Convert to array and filter out branches with no products (if search is active)
+    return Array.from(branchMap.values()).filter(bp => 
+      searchTerm ? bp.stocks.length > 0 : true
+    );
+  };
+
+  const branchProductStocks = getBranchProductStocks();
+
   // Calculate statistics
   const totalProducts = products.length;
   const totalStockValue = products.reduce((sum, product) => {
@@ -290,7 +324,7 @@ function ProductList() {
             </div>
           </div>
 
-          {/* Products Grid */}
+          {/* Branch-Based Products Grid */}
           {loading ? (
             <div className="flex justify-center py-20">
               <div className="text-center">
@@ -298,7 +332,7 @@ function ProductList() {
                 <p className="text-gray-500 mt-4">Loading products...</p>
               </div>
             </div>
-          ) : filteredProducts.length === 0 ? (
+          ) : branchProductStocks.length === 0 ? (
             <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
               <ShoppingOutlined className="text-6xl text-gray-300 mb-4" />
               <p className="text-gray-500 text-lg mb-2">No products found</p>
@@ -306,113 +340,133 @@ function ProductList() {
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-6">
-              {filteredProducts.map((product) => (
-                <div key={product.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow">
-                  {/* Product Header */}
-                  <div className="bg-gray-50 border-b border-gray-200 px-6 py-4">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <h3 className="text-lg font-semibold text-gray-800">{product.name}</h3>
-                        <Tag color="green" className="mt-1 text-base font-bold">
-                          {formatCurrency(product.price)}
-                        </Tag>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-xs text-gray-500 uppercase tracking-wide">Total Inventory</p>
-                        <p className="text-2xl font-bold text-blue-600">{getTotalStock(product)}</p>
-                        <p className="text-xs text-gray-400">units</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Product Body with Horizontal Scroll */}
-                  <div className="p-6">
-                    <div className="flex justify-between items-center mb-4">
-                      <div className="flex items-center gap-2">
-                        <BranchesOutlined className="text-gray-400" />
-                        <span className="text-sm font-medium text-gray-700">Branch Stock Levels</span>
-                      </div>
-                      <Tag>{product.product_stocks?.length || 0} branches</Tag>
-                    </div>
-
-                    {/* Horizontal Scroll Container */}
-                    <div className="overflow-x-auto pb-2">
-                      <div className="flex gap-3 min-w-min">
-                        {product.product_stocks?.length > 0 ? (
-                          product.product_stocks.map((stock) => {
-                            const stockPercentage = (stock.quantity / 100) * 100;
-                            const isLowStock = stock.quantity < 20;
-                            return (
-                              <div key={stock.id} className="border border-gray-100 rounded-lg p-3 hover:bg-gray-50 transition-colors min-w-[200px] flex-shrink-0">
-                                <div className="flex flex-col gap-2">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                      <div className={`w-2 h-2 rounded-full ${isLowStock ? 'bg-red-500 animate-pulse' : 'bg-green-500'}`}></div>
-                                      <span className="font-medium text-gray-700 text-sm">{stock.branch?.name || `Branch ${stock.branch_id}`}</span>
-                                    </div>
-                                    {isLowStock && (
-                                      <Tag color="orange" className="text-xs">Low Stock</Tag>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2">
-                                      <BoxPlotOutlined className="text-gray-400 text-sm" />
-                                      <span className={`font-bold text-lg ${isLowStock ? 'text-red-600' : 'text-gray-800'}`}>{stock.quantity}</span>
-                                      <span className="text-xs text-gray-500">units</span>
-                                    </div>
-                                  </div>
-                                  <Progress 
-                                    percent={Math.min(stockPercentage, 100)} 
-                                    size="small" 
-                                    strokeColor={isLowStock ? "#ff4d4f" : "#52c41a"}
-                                    showInfo={false}
-                                  />
-                                </div>
-                              </div>
-                            );
-                          })
-                        ) : (
-                          <div className="text-center py-8 text-gray-400 bg-gray-50 rounded-lg min-w-[300px]">
-                            <BoxPlotOutlined className="text-4xl mb-2" />
-                            <p className="text-sm">No stock available</p>
-                            <Button 
-                              type="link" 
-                              size="small"
-                              onClick={() => {
-                                setSelectedProduct(product);
-                                setIsRestockModalVisible(true);
-                              }}
-                              className="mt-2"
-                            >
-                              Add stock now →
-                            </Button>
+              {branchProductStocks.map((branchData) => {
+                const { branch, stocks } = branchData;
+                const totalBranchStock = stocks.reduce((sum, s) => sum + s.quantity, 0);
+                const hasProducts = stocks.length > 0;
+                
+                return (
+                  <div key={branch.id} className="bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-lg transition-shadow">
+                    {/* Branch Header */}
+                    <div className="bg-gray-50 border-b border-gray-200 px-6 py-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-blue-100 rounded-full p-2">
+                            <BranchesOutlined className="text-xl text-blue-600" />
                           </div>
-                        )}
+                          <div>
+                            <h3 className="text-lg font-semibold text-gray-800">{branch.name}</h3>
+                            <p className="text-sm text-gray-500">{branch.address || 'No address set'}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-gray-500 uppercase tracking-wide">Total Stock</p>
+                          <p className="text-2xl font-bold text-blue-600">{totalBranchStock}</p>
+                          <p className="text-xs text-gray-400">units across {stocks.length} products</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {/* Product Actions */}
-                  <div className="border-t border-gray-200 bg-gray-50 px-6 py-3 flex justify-end gap-3">
-                    <Button 
-                      icon={<PlusOutlined />}
-                      onClick={() => {
-                        setSelectedProduct(product);
-                        setIsRestockModalVisible(true);
-                      }}
-                    >
-                      Restock
-                    </Button>
-                    <Button 
-                      danger
-                      icon={<DeleteOutlined />}
-                      onClick={() => handleDeleteProduct(product)}
-                    >
-                      Delete
-                    </Button>
+                    {/* Branch Products Table */}
+                    <div className="p-0">
+                      {hasProducts ? (
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead className="bg-gray-50 border-b border-gray-200">
+                              <tr>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Level</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100">
+                              {stocks.map((stock) => {
+                                const isLowStock = stock.quantity < 20;
+                                const stockPercentage = Math.min((stock.quantity / 100) * 100, 100);
+                                
+                                return (
+                                  <tr key={stock.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-6 py-4">
+                                      <div>
+                                        <p className="font-medium text-gray-800">{stock.product.name}</p>
+                                      </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <span className="text-green-600 font-semibold">
+                                        {formatCurrency(stock.product.price)}
+                                      </span>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <div className="flex items-center gap-3">
+                                        <span className={`font-bold ${isLowStock ? 'text-red-600' : 'text-gray-800'}`}>
+                                          {stock.quantity}
+                                        </span>
+                                        <span className="text-xs text-gray-500">units</span>
+                                      </div>
+                                      <div className="w-32 mt-1">
+                                        <Progress 
+                                          percent={stockPercentage} 
+                                          size="small" 
+                                          strokeColor={isLowStock ? "#ff4d4f" : "#52c41a"}
+                                          showInfo={false}
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      {isLowStock ? (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
+                                          <Tag color="orange" className="text-xs">Low Stock</Tag>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                                          <Tag color="green" className="text-xs">In Stock</Tag>
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                      <div className="flex justify-end gap-2">
+                                        <Button 
+                                          size="small"
+                                          icon={<PlusOutlined />}
+                                          onClick={() => {
+                                            setSelectedProduct(stock.product);
+                                            setSelectedBranch(branch.id);
+                                            setIsRestockModalVisible(true);
+                                          }}
+                                        >
+                                          Restock
+                                        </Button>
+                                        <Button 
+                                          size="small"
+                                          danger
+                                          icon={<DeleteOutlined />}
+                                          onClick={() => handleDeleteProduct(stock.product)}
+                                        >
+                                          Delete
+                                        </Button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 text-gray-400">
+                          <BoxPlotOutlined className="text-5xl mb-3" />
+                          <p className="text-gray-500 mb-2">No products in this branch</p>
+                          <p className="text-sm text-gray-400">Add stock to products to see them here</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
