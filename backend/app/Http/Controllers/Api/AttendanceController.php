@@ -120,45 +120,56 @@ class AttendanceController extends Controller
 
     public function timeOut(Request $request, $id)
     {
-        $validated = $request->validate([
-            'time_out' => 'required|string',
-        ]);
+        try {
+            $validated = $request->validate([
+                'time_out' => 'required|string',
+            ]);
 
-        $attendance = Attendance::findOrFail($id);
+            $attendance = Attendance::findOrFail($id);
 
-        if (!$attendance->time_in) {
+            if (!$attendance->time_in) {
+                return response()->json([
+                    'message' => 'Time in is required before time out.',
+                    'error' => 'Please time in first.',
+                ], 422);
+            }
+
+            if ($attendance->time_out) {
+                return response()->json([
+                    'message' => 'Time out already recorded for today.',
+                    'error' => 'You cannot time out again for the same attendance record.',
+                    'attendance' => $attendance,
+                ], 409);
+            }
+
+            $timeIn = \Carbon\Carbon::parse($attendance->time_in);
+            $timeOut = \Carbon\Carbon::parse($timeIn->toDateString() . ' ' . $validated['time_out']);
+
+            if ($timeOut->lt($timeIn)) {
+                $timeOut->addDay();
+            }
+
+            $minutesWorked = $timeIn->diffInMinutes($timeOut);
+            $hoursWorked = round($minutesWorked / 60, 2);
+            $status = $attendance->is_late ? 'completed_late' : 'completed';
+
+            $attendance->update([
+                'time_out' => $timeOut->format('H:i:s'),
+                'hours_worked' => $hoursWorked,
+                'status' => $status,
+            ]);
+
+            return response()->json($attendance);
+        } catch (\Exception $e) {
+            \Log::error('TimeOut error: ' . $e->getMessage(), [
+                'id' => $id,
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
-                'message' => 'Time in is required before time out.',
-                'error' => 'Please time in first.',
-            ], 422);
+                'message' => 'Failed to record time out',
+                'error' => $e->getMessage(),
+            ], 500);
         }
-
-        if ($attendance->time_out) {
-            return response()->json([
-                'message' => 'Time out already recorded for today.',
-                'error' => 'You cannot time out again for the same attendance record.',
-                'attendance' => $attendance,
-            ], 409);
-        }
-
-        $timeOut = \Carbon\Carbon::parse($attendance->date->toDateString() . ' ' . $validated['time_out']);
-        $timeIn = \Carbon\Carbon::parse($attendance->date->toDateString() . ' ' . $attendance->time_in);
-
-        if ($timeOut->lt($timeIn)) {
-            $timeOut->addDay();
-        }
-
-        $minutesWorked = $timeIn->diffInMinutes($timeOut);
-        $hoursWorked = round($minutesWorked / 60, 2);
-        $status = $attendance->is_late ? 'completed_late' : 'completed';
-
-        $attendance->update([
-            'time_out' => $timeOut->format('H:i:s'),
-            'hours_worked' => $hoursWorked,
-            'status' => $status,
-        ]);
-
-        return response()->json($attendance);
     }
 
     public function getPayroll(Request $request)
