@@ -34,16 +34,16 @@ const isPresentForDay = (staff) => Boolean(staff.time_in_raw);
 const formatTime = (value) => {
   if (!value) return "-";
 
-  const date = new Date(value);
-  if (!Number.isNaN(date.getTime())) {
-    return date.toLocaleTimeString("en-PH", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: true,
-    });
-  }
-
-  return value;
+  // Parse the time string directly (format is HH:MM:SS from backend)
+  const [hours, minutes] = value.split(':');
+  const hour = parseInt(hours, 10);
+  const minute = parseInt(minutes, 10);
+  
+  const period = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12; // Convert 0 to 12
+  const displayMinute = minute.toString().padStart(2, '0');
+  
+  return `${displayHour}:${displayMinute} ${period}`;
 };
 
 function BranchDetails() {
@@ -544,10 +544,6 @@ function BranchDetails() {
                         <div className="flex-1">
                           <div className="font-semibold text-gray-800">{staff.name}</div>
                           <div className="text-xs text-gray-500">{staff.position}</div>
-                          <div className="text-xs text-gray-400 mt-1">
-                            {staff.time_in} - {staff.time_out_raw ? staff.time_out : "Working"}
-                            {staff.hours_worked ? ` (${staff.hours_worked} hrs)` : ""}
-                          </div>
                         </div>
                         {getStatusTag(staff.status)}
                       </div>
