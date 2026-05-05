@@ -291,13 +291,15 @@ function AttendanceAdmin() {
     for (const record of uniqueStaff) {
       if (!record.userId) continue;
       
+      const userId = record.userId;
       const staffName = `${record.user.firstname} ${record.user.lastname}`;
       
       try {
         // Fetch deductions
-        const deductionsRes = await api.get(`/staff/${record.userId}/deductions/${monthNum}/${yearNum}`);
-        console.log(`[LOAD DEDUCTIONS] ${staffName}:`, deductionsRes.data);
-        newDeductions[staffName] = {
+        const deductionsRes = await api.get(`/staff/${userId}/deductions/${monthNum}/${yearNum}`);
+        console.log(`[LOAD DEDUCTIONS] ${staffName} (ID: ${userId}):`, deductionsRes.data);
+        newDeductions[userId] = {
+          staffName,
           deductionRecordExists: deductionsRes.data.deduction_record_exists === true,
           sss: toNumber(deductionsRes.data.sss),
           philhealth: toNumber(deductionsRes.data.philhealth),
@@ -307,9 +309,10 @@ function AttendanceAdmin() {
         };
         
         // Fetch incentives
-        const incentivesRes = await api.get(`/staff/${record.userId}/incentives/${monthNum}/${yearNum}`);
-        console.log(`[LOAD INCENTIVES] ${staffName}:`, incentivesRes.data);
-        newIncentives[staffName] = {
+        const incentivesRes = await api.get(`/staff/${userId}/incentives/${monthNum}/${yearNum}`);
+        console.log(`[LOAD INCENTIVES] ${staffName} (ID: ${userId}):`, incentivesRes.data);
+        newIncentives[userId] = {
+          staffName,
           perfectAttendance: incentivesRes.data.perfect_attendance || false,
           commission: incentivesRes.data.commission || 0,
           otherIncentives: incentivesRes.data.other_incentives || 0,
@@ -317,9 +320,10 @@ function AttendanceAdmin() {
           chickens_sold: incentivesRes.data.chickens_sold || 0,
         };
       } catch (error) {
-        console.error(`Error loading deductions/incentives for ${staffName}:`, error);
+        console.error(`Error loading deductions/incentives for ${staffName} (ID: ${userId}):`, error);
         // Set defaults if API fails
-        newDeductions[staffName] = {
+        newDeductions[userId] = {
+          staffName,
           deductionRecordExists: false,
           sss: 0,
           philhealth: 0,
@@ -327,7 +331,8 @@ function AttendanceAdmin() {
           cashAdvance: 0,
           otherDeductions: 0,
         };
-        newIncentives[staffName] = {
+        newIncentives[userId] = {
+          staffName,
           perfectAttendance: false,
           commission: 0,
           otherIncentives: 0,
@@ -366,16 +371,16 @@ function AttendanceAdmin() {
 
   useEffect(() => {
     if (!showDeductionsModal || !selectedStaff) return;
-    const staffName = selectedStaff.staffName;
+    const userId = selectedStaff.userId;
     const gross = selectedStaff.monthlySummary?.totalGrossPay ?? 0;
     const gov = computeGovernmentDeductionsFromMonthlyGross(gross);
     form.setFieldsValue({
       sss: gov.sss,
       philhealth: gov.philhealth,
       pagibig: gov.pagibig,
-      cashAdvance: deductions[staffName]?.cashAdvance ?? 0,
-      perfectAttendance: incentives[staffName]?.perfectAttendance ?? false,
-      commission: incentives[staffName]?.commission ?? 0,
+      cashAdvance: deductions[userId]?.cashAdvance ?? 0,
+      perfectAttendance: incentives[userId]?.perfectAttendance ?? false,
+      commission: incentives[userId]?.commission ?? 0,
     });
   }, [showDeductionsModal, selectedStaff, deductions, incentives, form]);
 
@@ -457,10 +462,10 @@ function AttendanceAdmin() {
     return earnings;
   };
 
-  const calculateDeductions = (staffName, employeeMonthlySummary = null) => {
+  const calculateDeductions = (userId, employeeMonthlySummary = null) => {
     if (!employeeMonthlySummary) return 0;
 
-    const staffDeductions = deductions[staffName] || {};
+    const staffDeductions = deductions[userId] || {};
 
     if (!staffDeductions.deductionRecordExists) {
       return 0;
@@ -479,8 +484,8 @@ function AttendanceAdmin() {
   };
 
   // Incentives calculation with commission + sales incentive
-  const calculateIncentives = (staffName, record) => {
-    const staffIncentives = incentives[staffName] || {};
+  const calculateIncentives = (userId, record) => {
+    const staffIncentives = incentives[userId] || {};
     
     let totalIncentives = 0;
 
@@ -550,20 +555,21 @@ function AttendanceAdmin() {
 
   // Calculate monthly payroll records grouped by employee
   const calculateMonthlyPayroll = () => {
-    // Group attendance records by employee
+    // Group attendance records by employee using userId to handle duplicate names
     const groupedByEmployee = attendanceData.reduce((acc, record) => {
+      const userId = record.userId || record.user?.id || record.id;
       const staffName = `${record.user.firstname} ${record.user.lastname}`;
-      if (!acc[staffName]) {
-        acc[staffName] = {
+      if (!acc[userId]) {
+        acc[userId] = {
           records: [],
           staffName,
           user: record.user,
-          userId: record.userId,
+          userId: userId,
           branch: record.branch,
           dailyRate: record.dailyRate || 0
         };
       }
-      acc[staffName].records.push(record);
+      acc[userId].records.push(record);
       return acc;
     }, {});
 
@@ -580,7 +586,7 @@ function AttendanceAdmin() {
       const payrollRecords = employee.records.map(record => {
         const staffName = employee.staffName;
         const dailyEarnings = calculateDailyEarnings(record);
-        const incentivesAmt = calculateIncentives(staffName, record);
+        const incentivesAmt = calculateIncentives(employee.userId, record);
         const { totalHours, isValid } = calculateHoursWorked(record.time_in_raw, record.time_out_raw);
         
         totalGrossPay += dailyEarnings;
@@ -608,7 +614,7 @@ function AttendanceAdmin() {
         daysLate
       };
       
-      const monthlyDeductions = calculateDeductions(employee.staffName, monthlySummaryData);
+      const monthlyDeductions = calculateDeductions(employee.userId, monthlySummaryData);
       // Add sales incentive (monthly amount based on products sold)
       const salesIncentive = getMonthlySalesIncentive(employee.userId);
       const totalIncentivesWithSales = totalIncentives + salesIncentive.incentiveAmount;
@@ -625,7 +631,7 @@ function AttendanceAdmin() {
         totalGrossPay: projectedMonthlyGross,
         totalIncentives: (totalIncentives / daysPresent) * daysInMonth
       };
-      const projectedMonthlyDeductions = calculateDeductions(employee.staffName, projectedMonthlySummaryData);
+      const projectedMonthlyDeductions = calculateDeductions(employee.userId, projectedMonthlySummaryData);
       const projectedMonthlyIncentives = (totalIncentives / daysPresent) * daysInMonth;
       const projectedMonthlyNet = projectedMonthlyGross - projectedMonthlyDeductions + projectedMonthlyIncentives;
 
@@ -672,12 +678,13 @@ function AttendanceAdmin() {
 
   // Generate monthly payroll slip
   const generateMonthlyPayrollSlip = (employee) => {
+    const userId = employee.userId;
     const staffName = employee.staffName;
-    const staffDeductions = deductions[staffName] || {};
+    const staffDeductions = deductions[userId] || {};
     const govDeductions = staffDeductions.deductionRecordExists
       ? computeGovernmentDeductionsFromMonthlyGross(employee.monthlySummary.totalGrossPay)
       : { sss: 0, philhealth: 0, pagibig: 0 };
-    const staffIncentives = incentives[staffName] || {};
+    const staffIncentives = incentives[userId] || {};
     const [year, month] = selectedMonth.split('-');
     
     return `
