@@ -9,6 +9,8 @@ import {
     TouchableOpacity,
     View,
     SafeAreaView,
+    Modal,
+    TouchableWithoutFeedback,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -42,14 +44,98 @@ const formatLocalDate = (date = new Date()) => {
   return `${year}-${month}-${day}`;
 };
 
+const formatDateTime = (value: any) => {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString('en-PH', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+};
+
 const getBranchIdFromUser = (user: any) => {
   if (!user) return null;
-  if (user.branch_id) return user.branch_id;
-  if (user.branchId) return user.branchId;
 
-  const assignments = Array.isArray(user.branchAssignments) ? user.branchAssignments : [];
-  const activeAssignment = assignments.find((assignment: any) => assignment?.is_active) || assignments[0];
-  return activeAssignment?.branch_id || activeAssignment?.branch?.id || activeAssignment?.branch?.branch_id || null;
+  // Some login flows store `{ user: {...}, token, role }`
+  const u = user?.user ? user.user : user;
+
+  if (!u) return null;
+  if (u.branch_id) return u.branch_id;
+  if (u.branchId) return u.branchId;
+  if (u.branch?.id) return u.branch.id;
+
+  // Accept both snake_case and camelCase arrays
+  const assignments = Array.isArray(u.branch_assignments)
+    ? u.branch_assignments
+    : Array.isArray(u.branchAssignments)
+      ? u.branchAssignments
+      : [];
+
+  const activeAssignment = assignments.find((a: any) => a?.is_active) || assignments[0];
+  return (
+    activeAssignment?.branch_id ||
+    activeAssignment?.branch?.id ||
+    activeAssignment?.branch?.branch_id ||
+    activeAssignment?.id ||
+    null
+  );
+};
+
+const idsEqual = (a: any, b: any) => String(a ?? '') === String(b ?? '');
+
+const resolveBranchId = async () => {
+  const userRaw = await AsyncStorage.getItem('user');
+  let user = userRaw ? JSON.parse(userRaw) : null;
+  // Normalize stored payloads like `{ user: {...} }`
+  if (user?.user) user = user.user;
+
+  let branchId = getBranchIdFromUser(user);
+  if (branchId) {
+    console.log('[DASHBOARD] Branch ID from storage user:', branchId);
+    return branchId;
+  }
+
+  try {
+    const response = await api.get('me');
+    if (response.data) {
+      user = response.data;
+      await AsyncStorage.setItem('user', JSON.stringify(user));
+    }
+    branchId = getBranchIdFromUser(user);
+    if (branchId) {
+      console.log('[DASHBOARD] Branch ID from /me:', branchId);
+      return branchId;
+    }
+  } catch (error) {
+    console.error('[DASHBOARD] Unable to fetch /me:', error);
+  }
+
+  if (user?.id) {
+    try {
+      console.log('[DASHBOARD] Fallback: fetching staff by user ID', user.id);
+      const staffResponse = await api.get(`staff/${user.id}`);
+      const staffData = staffResponse.data;
+      branchId = getBranchIdFromUser(staffData);
+      if (branchId) {
+        await AsyncStorage.setItem(
+          'user',
+          JSON.stringify({ ...user, branch_id: branchId, branchAssignments: staffData?.branchAssignments })
+        );
+        console.log('[DASHBOARD] Branch ID from staff endpoint:', branchId);
+        return branchId;
+      }
+    } catch (error) {
+      console.error('[DASHBOARD] Unable to fetch staff assignment:', error);
+    }
+  }
+
+  console.log('[DASHBOARD] No branch ID resolved');
+  return null;
 };
 
 const getSaleDate = (sale: any) => {
@@ -84,6 +170,10 @@ const DashboardScreen = () => {
   const [loading, setLoading] = useState(true);
   const [grossSales, setGrossSales] = useState(0);
   const [todaySales, setTodaySales] = useState(0);
+  const [todaySalesList, setTodaySalesList] = useState<any[]>([]);
+  const [salesTodayModalVisible, setSalesTodayModalVisible] = useState(false);
+  const [salesTodayPage, setSalesTodayPage] = useState(1);
+  const SALES_TODAY_PAGE_SIZE = 4;
 
   const loadDashboardData = async () => {
     try {
@@ -91,8 +181,7 @@ const DashboardScreen = () => {
       const monthStart = formatLocalDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
       const monthEnd = formatLocalDate(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0));
       const nextMonthStart = formatLocalDate(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1));
-      const user = await getStoredUser();
-      const branchId = getBranchIdFromUser(user);
+      const branchId = await resolveBranchId();
       const branchParams = branchId ? { branch_id: branchId } : {};
 
       const [productsRes, summaryRes] = await Promise.all([
@@ -105,11 +194,10 @@ const DashboardScreen = () => {
 
       const mappedStock: StockItem[] = (productsRes.data || []).map((item: any) => {
         // Find stock for user's branch
-        const branchStock = (item.product_stocks || []).find((s: any) => 
-          s.branch_id === branchId
+        const branchStock = (item.product_stocks || []).find((s: any) =>
+          idsEqual(s.branch_id, branchId)
         );
         
-        const isReceived = branchStock?.received || false;
         const quantity = branchStock?.quantity || 0;
         const minStock = branchStock?.minimum_stock || 0;
         const status: StockStatus = quantity <= 0 ? 'Out of Stock' : quantity <= minStock ? 'Low Stock' : 'In Stock';
@@ -123,7 +211,6 @@ const DashboardScreen = () => {
           price: Number(item.price || 0),
           minStock,
           status,
-          received: isReceived,
           branchStock: branchStock,
           product_stocks: item.product_stocks,
         };
@@ -131,6 +218,8 @@ const DashboardScreen = () => {
       setStockData(mappedStock);
 
       const todaySalesTotal = sumSalesTotal(summaryRes.data || []);
+      setTodaySalesList(summaryRes.data || []);
+      setSalesTodayPage(1);
       const monthSalesTotal = sumSalesTotal(
         (monthlySalesRes.data || []).filter((sale: any) => {
           const saleDate = getSaleDate(sale);
@@ -145,6 +234,8 @@ const DashboardScreen = () => {
       setStockData([]);
       setGrossSales(0);
       setTodaySales(0);
+      setTodaySalesList([]);
+      setSalesTodayPage(1);
     } finally {
       setLoading(false);
     }
@@ -181,6 +272,49 @@ const DashboardScreen = () => {
     </View>
   );
 
+  const SaleRow = ({ sale }: { sale: any }) => {
+    const cash = Number(sale?.cash_collected || 0);
+    const change = Number(sale?.change_given ?? sale?.changeGiven ?? 0);
+    const total = Number(sale?.total || 0);
+    const invoice = sale?.invoice_number || `INV-${sale?.id || '-'}`;
+    const hasSenior = Boolean(sale?.senior_discount);
+    const discountAmount = Number(sale?.discount_amount || 0);
+    const customer = sale?.customer_name || '-';
+
+    return (
+      <View className="bg-white rounded-xl p-4 mb-3 border border-gray-100">
+        <View className="flex-row justify-between items-start">
+          <View className="flex-1 pr-3">
+            <Text className="text-gray-900 font-bold text-base">{invoice}</Text>
+            <Text className="text-gray-500 text-xs mt-0.5">{formatDateTime(sale?.created_at || sale?.sale_date)}</Text>
+            <Text className="text-gray-500 text-xs mt-0.5">Customer: {customer}</Text>
+          </View>
+          <View className="items-end">
+            <Text className="text-green-600 font-extrabold text-lg">₱{total.toLocaleString()}</Text>
+            {hasSenior && (
+              <Text className="text-emerald-600 text-xs font-bold">Senior: -₱{discountAmount.toLocaleString()}</Text>
+            )}
+          </View>
+        </View>
+
+        <View className="flex-row justify-between items-center mt-3 pt-3 border-t border-gray-100">
+          <View className="flex-1 items-center">
+            <Text className="text-gray-500 text-[10px] font-semibold uppercase tracking-wider">Cash</Text>
+            <Text className="text-gray-900 font-bold">₱{cash.toLocaleString()}</Text>
+          </View>
+          <View className="flex-1 items-center">
+            <Text className="text-gray-500 text-[10px] font-semibold uppercase tracking-wider">Change</Text>
+            <Text className="text-gray-900 font-bold">₱{change.toLocaleString()}</Text>
+          </View>
+          <View className="flex-1 items-center">
+            <Text className="text-gray-500 text-[10px] font-semibold uppercase tracking-wider">Payment</Text>
+            <Text className="text-gray-900 font-bold">{String(sale?.payment_method || 'cash').toUpperCase()}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <SafeAreaView className="flex-1 justify-center items-center bg-gray-50">
@@ -213,27 +347,40 @@ const DashboardScreen = () => {
           </View>
 
           {/* Main Sales Card */}
-          <View className="bg-white rounded-2xl p-6 shadow-lg">
-            <Text className="text-gray-500 text-xs font-semibold tracking-wider uppercase mb-2">Total Sales Today</Text>
-            <Text className="text-gray-900 text-5xl font-bold mb-6">₱{todaySales.toLocaleString()}</Text>
-            
-            <View className="flex-row justify-between items-center pt-4 border-t border-gray-100">
-              <View>
-                <Text className="text-gray-500 text-xs font-medium">This Month</Text>
-                <Text className="text-gray-900 font-bold text-lg">₱{grossSales.toLocaleString()}</Text>
+          <TouchableOpacity activeOpacity={0.9} onPress={() => { setSalesTodayPage(1); setSalesTodayModalVisible(true); }}>
+            <View className="bg-white rounded-2xl p-6 shadow-lg">
+              <View className="flex-row justify-between items-start">
+                <View className="flex-1 pr-4">
+                  <Text className="text-gray-500 text-xs font-semibold tracking-wider uppercase mb-2">Total Sales Today</Text>
+                  <Text className="text-gray-900 text-5xl font-bold mb-2">₱{todaySales.toLocaleString()}</Text>
+                  <Text className="text-gray-400 text-xs">Tap to view checkouts</Text>
+                </View>
+                <View className="bg-red-50 border border-red-100 px-3 py-2 rounded-xl">
+                  <View className="flex-row items-center">
+                    <Icon name="receipt-long" size={18} color="#DC2626" />
+                    <Text className="text-red-600 font-bold text-xs ml-1">{todaySalesList.length}</Text>
+                  </View>
+                </View>
               </View>
-              <View>
-                <Text className="text-gray-500 text-xs font-medium">Target</Text>
-                <Text className="text-gray-900 font-bold text-lg">₱150,000</Text>
-              </View>
-              <View className="bg-green-100 px-4 py-2 rounded-full">
-                <View className="flex-row items-center">
-                  <Icon name="arrow-upward" size={14} color="#10B981" />
-                  <Text className="text-green-600 text-sm font-bold ml-1">12%</Text>
+              
+              <View className="flex-row justify-between items-center pt-4 border-t border-gray-100 mt-4">
+                <View>
+                  <Text className="text-gray-500 text-xs font-medium">This Month</Text>
+                  <Text className="text-gray-900 font-bold text-lg">₱{grossSales.toLocaleString()}</Text>
+                </View>
+                <View>
+                  <Text className="text-gray-500 text-xs font-medium">Target</Text>
+                  <Text className="text-gray-900 font-bold text-lg">₱150,000</Text>
+                </View>
+                <View className="bg-green-100 px-4 py-2 rounded-full">
+                  <View className="flex-row items-center">
+                    <Icon name="arrow-upward" size={14} color="#10B981" />
+                    <Text className="text-green-600 text-sm font-bold ml-1">12%</Text>
+                  </View>
                 </View>
               </View>
             </View>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Stats Grid */}
@@ -347,6 +494,111 @@ const DashboardScreen = () => {
           </Text>
         </View>
       </ScrollView>
+
+      {/* Sales Today Modal */}
+      <Modal
+        visible={salesTodayModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setSalesTodayModalVisible(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-end">
+          {/* Backdrop (tap to close) */}
+          <TouchableWithoutFeedback onPress={() => setSalesTodayModalVisible(false)}>
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+          </TouchableWithoutFeedback>
+
+          {/* Sheet */}
+          <View className="bg-white rounded-t-3xl h-[92%]">
+                <View className="bg-red-600 px-5 py-4 rounded-t-3xl flex-row justify-between items-center">
+                  <View>
+                    <Text className="text-white font-bold text-lg">Sales Today</Text>
+                    <Text className="text-white/80 text-xs">{todaySalesList.length} checkout(s)</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setSalesTodayModalVisible(false)}>
+                    <Icon name="close" size={26} color="white" />
+                  </TouchableOpacity>
+                </View>
+
+                {(() => {
+                  const totalItems = todaySalesList.length;
+                  const totalPages = Math.max(1, Math.ceil(totalItems / SALES_TODAY_PAGE_SIZE));
+                  const page = Math.min(Math.max(1, salesTodayPage), totalPages);
+                  const start = (page - 1) * SALES_TODAY_PAGE_SIZE;
+                  const pagedSales = todaySalesList.slice(start, start + SALES_TODAY_PAGE_SIZE);
+
+                  return (
+                    <>
+                      <ScrollView className="p-5" showsVerticalScrollIndicator={false}>
+                  {todaySalesList.length === 0 ? (
+                    <View className="py-16 items-center">
+                      <View className="bg-gray-100 p-4 rounded-full mb-4">
+                        <Icon name="receipt" size={34} color="#9CA3AF" />
+                      </View>
+                      <Text className="text-gray-500 font-medium">No sales yet for today</Text>
+                      <Text className="text-gray-400 text-xs mt-1">Checkouts will appear here after POS orders</Text>
+                    </View>
+                  ) : (
+                    <>
+                      <View className="bg-gray-50 border border-gray-200 rounded-2xl p-4 mb-4">
+                        <View className="flex-row justify-between items-center">
+                          <View>
+                            <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Total</Text>
+                            <Text className="text-gray-900 font-extrabold text-2xl">₱{todaySales.toLocaleString()}</Text>
+                          </View>
+                          <View className="bg-white border border-gray-200 rounded-2xl px-3 py-2">
+                            <Text className="text-gray-700 font-bold text-xs">Date: {formatLocalDate()}</Text>
+                          </View>
+                        </View>
+                      </View>
+
+                      {pagedSales.map((sale) => (
+                        <SaleRow key={sale?.id || sale?.invoice_number} sale={sale} />
+                      ))}
+                    </>
+                  )}
+
+                  <View style={{ height: 24 }} />
+                      </ScrollView>
+
+                      {/* Pagination (4 per page) */}
+                      {totalItems > SALES_TODAY_PAGE_SIZE && (
+                        <View className="px-5 py-4 border-t border-gray-100 flex-row items-center justify-between">
+                          <TouchableOpacity
+                            onPress={() => setSalesTodayPage((p) => Math.max(1, p - 1))}
+                            disabled={page <= 1}
+                            className={`px-4 py-3 rounded-2xl border ${page <= 1 ? 'bg-gray-100 border-gray-200' : 'bg-white border-gray-200'}`}
+                            activeOpacity={0.85}
+                          >
+                            <View className="flex-row items-center">
+                              <Icon name="chevron-left" size={20} color={page <= 1 ? '#9CA3AF' : '#374151'} />
+                              <Text className={`font-bold ml-1 ${page <= 1 ? 'text-gray-400' : 'text-gray-700'}`}>Prev</Text>
+                            </View>
+                          </TouchableOpacity>
+
+                          <Text className="text-gray-600 font-semibold">
+                            Page {page} / {totalPages}
+                          </Text>
+
+                          <TouchableOpacity
+                            onPress={() => setSalesTodayPage((p) => Math.min(totalPages, p + 1))}
+                            disabled={page >= totalPages}
+                            className={`px-4 py-3 rounded-2xl border ${page >= totalPages ? 'bg-gray-100 border-gray-200' : 'bg-white border-gray-200'}`}
+                            activeOpacity={0.85}
+                          >
+                            <View className="flex-row items-center">
+                              <Text className={`font-bold mr-1 ${page >= totalPages ? 'text-gray-400' : 'text-gray-700'}`}>Next</Text>
+                              <Icon name="chevron-right" size={20} color={page >= totalPages ? '#9CA3AF' : '#374151'} />
+                            </View>
+                          </TouchableOpacity>
+                        </View>
+                      )}
+                    </>
+                  );
+                })()}
+              </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
