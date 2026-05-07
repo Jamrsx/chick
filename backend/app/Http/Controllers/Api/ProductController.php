@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Models\ProductStock;
+use App\Models\ProductStockDelivery;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -13,11 +14,15 @@ class ProductController extends Controller
 {
     public function index()
     {
-        $products = Product::with(['stocks.branch'])->where('is_active', true)->get();
+        $products = Product::with(['stocks.branch', 'deliveries.branch'])
+            ->where('is_active', true)
+            ->get();
 
         // Frontend/mobile expect `product_stocks`
         $products = $products->map(function ($p) {
             $p->product_stocks = $p->stocks;
+            // New: pending/received delivery rows for "ongoing stocks"
+            $p->ongoing_stocks = $p->deliveries;
             return $p;
         });
 
@@ -26,8 +31,9 @@ class ProductController extends Controller
 
     public function show($id)
     {
-        $product = Product::with(['stocks.branch'])->findOrFail($id);
+        $product = Product::with(['stocks.branch', 'deliveries.branch'])->findOrFail($id);
         $product->product_stocks = $product->stocks;
+        $product->ongoing_stocks = $product->deliveries;
         return response()->json($product);
     }
 
@@ -85,8 +91,9 @@ class ProductController extends Controller
 
             DB::commit();
 
-            $product->load(['stocks.branch']);
+            $product->load(['stocks.branch', 'deliveries.branch']);
             $product->product_stocks = $product->stocks;
+            $product->ongoing_stocks = $product->deliveries;
             return response()->json($product, 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -107,8 +114,9 @@ class ProductController extends Controller
         ]);
 
         $product->update($validated);
-        $product->load(['stocks.branch']);
+        $product->load(['stocks.branch', 'deliveries.branch']);
         $product->product_stocks = $product->stocks;
+        $product->ongoing_stocks = $product->deliveries;
         return response()->json($product);
     }
 
@@ -126,14 +134,18 @@ class ProductController extends Controller
             'quantity' => 'required|integer|min:1',
         ]);
 
-        $stock = ProductStock::firstOrCreate(
-            ['product_id' => $id, 'branch_id' => $validated['branch_id']],
-            ['quantity' => 0, 'minimum_stock' => 0]
-        );
+        // Restock represents "incoming stock" and must NOT immediately affect sellable inventory.
+        // Insert a pending delivery row.
+        $delivery = ProductStockDelivery::create([
+            'product_id' => (int) $id,
+            'branch_id' => $validated['branch_id'],
+            'quantity' => $validated['quantity'],
+            'restocked_at' => \Carbon\Carbon::now('Asia/Manila'),
+            'received_at' => null,
+            'received_by' => null,
+        ]);
 
-        $stock->increment('quantity', $validated['quantity']);
-
-        return response()->json(['message' => 'Restocked successfully', 'stock' => $stock]);
+        return response()->json(['message' => 'Restocked successfully', 'delivery' => $delivery]);
     }
 
     public function getLowStock()
@@ -143,6 +155,59 @@ class ProductController extends Controller
             ->get();
 
         return response()->json($rows);
+    }
+
+    public function toggleReceived(Request $request, $id)
+    {
+        $validated = $request->validate([
+            'branch_id' => 'required|exists:branches,id',
+        ]);
+
+        // Receive ALL pending deliveries for this product+branch.
+        $pending = ProductStockDelivery::where('product_id', (int) $id)
+            ->where('branch_id', $validated['branch_id'])
+            ->whereNull('received_at')
+            ->get();
+
+        if ($pending->isEmpty()) {
+            return response()->json(['message' => 'No pending stock to receive'], 200);
+        }
+
+        $now = \Carbon\Carbon::now('Asia/Manila');
+        $receiverId = $request->user()?->id;
+        $totalQty = (int) $pending->sum('quantity');
+
+        DB::beginTransaction();
+        try {
+            // Ensure current stock row exists, then add received quantity.
+            $stock = ProductStock::firstOrCreate(
+                ['product_id' => (int) $id, 'branch_id' => $validated['branch_id']],
+                ['quantity' => 0, 'minimum_stock' => 0]
+            );
+
+            $stock->increment('quantity', $totalQty);
+            $stock->restocked_at = $now;
+            $stock->save();
+
+            ProductStockDelivery::where('product_id', (int) $id)
+                ->where('branch_id', $validated['branch_id'])
+                ->whereNull('received_at')
+                ->update([
+                    'received_at' => $now,
+                    'received_by' => $receiverId,
+                ]);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json(['message' => 'Failed to receive stock', 'error' => $e->getMessage()], 500);
+        }
+
+        return response()->json([
+            'message' => 'Stock marked as received',
+            'received_count' => $pending->count(),
+            'received_quantity' => $totalQty,
+        ]);
     }
 }
 

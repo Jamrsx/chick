@@ -23,6 +23,11 @@ class Product extends Model
         return $this->hasMany(ProductStock::class);
     }
 
+    public function deliveries()
+    {
+        return $this->hasMany(ProductStockDelivery::class);
+    }
+
     public function branches()
     {
         return $this->belongsToMany(Branch::class, 'product_stocks')

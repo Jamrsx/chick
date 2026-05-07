@@ -159,7 +159,14 @@ function ProductList() {
 
   const getTotalStock = (product) => {
     if (!product.product_stocks) return 0;
-    return product.product_stocks.reduce((sum, stock) => sum + stock.quantity, 0);
+    // Only RECEIVED stock is sellable/available
+    return product.product_stocks.reduce((sum, stock) => sum + (stock.received ? stock.quantity : 0), 0);
+  };
+
+  const getPendingStock = (product) => {
+    if (!product.ongoing_stocks) return 0;
+    // Pending deliveries are those with received_at = null
+    return product.ongoing_stocks.reduce((sum, delivery) => sum + (!delivery.received_at ? Number(delivery.quantity || 0) : 0), 0);
   };
 
   // Filter products by search term
@@ -179,18 +186,60 @@ function ProductList() {
       });
     });
     
-    // Add product stocks to their respective branches
+    // Add product stocks to their respective branches (AGGREGATED per product)
     filteredProducts.forEach(product => {
-      if (product.product_stocks && product.product_stocks.length > 0) {
-        product.product_stocks.forEach(stock => {
-          if (branchMap.has(stock.branch_id)) {
-            branchMap.get(stock.branch_id).stocks.push({
-              ...stock,
-              product
-            });
+      const perBranch = new Map();
+
+      // Current sellable stock (product_stocks, unique per product+branch)
+      (product.product_stocks || []).forEach(stock => {
+        if (!branchMap.has(stock.branch_id)) return;
+        const key = `${stock.branch_id}:${product.id}`;
+        const current = perBranch.get(key) || {
+          id: key,
+          branch_id: stock.branch_id,
+          product,
+          receivedQty: 0,
+          pendingQty: 0,
+          lastRestockedAt: null,
+        };
+
+        current.receivedQty = Number(stock.quantity || 0);
+        if (stock.restocked_at) current.lastRestockedAt = stock.restocked_at;
+        perBranch.set(key, current);
+      });
+
+      // Ongoing deliveries (product_stock_deliveries)
+      (product.ongoing_stocks || []).forEach(delivery => {
+        if (!branchMap.has(delivery.branch_id)) return;
+        const key = `${delivery.branch_id}:${product.id}`;
+        const current = perBranch.get(key) || {
+          id: key,
+          branch_id: delivery.branch_id,
+          product,
+          receivedQty: 0,
+          pendingQty: 0,
+          lastRestockedAt: null,
+        };
+
+        const qty = Number(delivery.quantity || 0);
+        if (!delivery.received_at) current.pendingQty += qty;
+
+        if (delivery.restocked_at) {
+          const currentDate = current.lastRestockedAt ? new Date(current.lastRestockedAt) : null;
+          const candidateDate = new Date(delivery.restocked_at);
+          if (!currentDate || candidateDate > currentDate) {
+            current.lastRestockedAt = delivery.restocked_at;
           }
-        });
-      }
+        }
+
+        perBranch.set(key, current);
+      });
+
+      perBranch.forEach(row => {
+        if (branchMap.has(row.branch_id)) {
+          branchMap.get(row.branch_id).stocks.push(row);
+        }
+      });
     });
     
     // Convert to array and filter out branches with no products (if search is active)
@@ -342,7 +391,7 @@ function ProductList() {
             <div className="grid grid-cols-1 gap-6">
               {branchProductStocks.map((branchData) => {
                 const { branch, stocks } = branchData;
-                const totalBranchStock = stocks.reduce((sum, s) => sum + s.quantity, 0);
+                const totalBranchStock = stocks.reduce((sum, s) => sum + Number(s.receivedQty || 0), 0);
                 const hasProducts = stocks.length > 0;
                 
                 return (
@@ -377,14 +426,19 @@ function ProductList() {
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Product</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock Level</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ongoing</th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Received</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Restocked</th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
                               {stocks.map((stock) => {
-                                const isLowStock = stock.quantity < 20;
-                                const stockPercentage = Math.min((stock.quantity / 100) * 100, 100);
+                                const receivedQty = Number(stock.receivedQty || 0);
+                                const pendingQty = Number(stock.pendingQty || 0);
+                                const isLowStock = receivedQty < 20;
+                                const stockPercentage = Math.min((receivedQty / 100) * 100, 100);
                                 
                                 return (
                                   <tr key={stock.id} className="hover:bg-gray-50 transition-colors">
@@ -401,7 +455,7 @@ function ProductList() {
                                     <td className="px-6 py-4">
                                       <div className="flex items-center gap-3">
                                         <span className={`font-bold ${isLowStock ? 'text-red-600' : 'text-gray-800'}`}>
-                                          {stock.quantity}
+                                          {receivedQty}
                                         </span>
                                         <span className="text-xs text-gray-500">units</span>
                                       </div>
@@ -415,6 +469,16 @@ function ProductList() {
                                       </div>
                                     </td>
                                     <td className="px-6 py-4">
+                                      {pendingQty > 0 ? (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse"></div>
+                                          <Tag color="orange" className="text-xs">{pendingQty} pending</Tag>
+                                        </div>
+                                      ) : (
+                                        <span className="text-xs text-gray-400">—</span>
+                                      )}
+                                    </td>
+                                    <td className="px-6 py-4">
                                       {isLowStock ? (
                                         <div className="flex items-center gap-2">
                                           <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
@@ -425,6 +489,35 @@ function ProductList() {
                                           <div className="w-2 h-2 rounded-full bg-green-500"></div>
                                           <Tag color="green" className="text-xs">In Stock</Tag>
                                         </div>
+                                      )}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      {pendingQty > 0 ? (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full bg-gray-400"></div>
+                                          <Tag color="default" className="text-xs">With Pending</Tag>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                                          <Tag color="green" className="text-xs">Received</Tag>
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      {stock.lastRestockedAt ? (
+                                        <div className="text-xs text-gray-600">
+                                          {new Date(stock.lastRestockedAt).toLocaleString('en-PH', {
+                                            year: 'numeric',
+                                            month: 'short',
+                                            day: 'numeric',
+                                            hour: '2-digit',
+                                            minute: '2-digit',
+                                            hour12: true
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <span className="text-xs text-gray-400">Never restocked</span>
                                       )}
                                     </td>
                                     <td className="px-6 py-4 text-right">

@@ -9,6 +9,7 @@ import {
     FlatList,
     Keyboard,
     KeyboardAvoidingView,
+    Modal,
     Platform,
     RefreshControl,
     ScrollView,
@@ -39,6 +40,16 @@ type StockProductStock = {
   branch?: StockBranch;
 };
 
+type StockDelivery = {
+  id: string;
+  branch_id: string | number;
+  quantity: number;
+  restocked_at?: string | null;
+  received_at?: string | null;
+  received_by?: string | number | null;
+  branch?: StockBranch;
+};
+
 type StockItem = {
   id: string;
   name: string;
@@ -50,9 +61,13 @@ type StockItem = {
   minStock: number;
   status: StockStatus;
   product_stocks?: StockProductStock[];
+  ongoing_stocks?: StockDelivery[];
   icon: string;
   description?: string;
   popular?: boolean;
+  branchStock?: StockProductStock;
+  pendingQty?: number;
+  lastDeliveryAt?: string | null;
 };
 
 export default function POSScreen() {
@@ -63,6 +78,10 @@ export default function POSScreen() {
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [ongoingStocksModalVisible, setOngoingStocksModalVisible] = useState(false);
+  const [ongoingStocks, setOngoingStocks] = useState<StockItem[]>([]);
+  const [collapsedReceived, setCollapsedReceived] = useState(false);
+  const [collapsedNotReceived, setCollapsedNotReceived] = useState(false);
   
   const categories = ['All', 'Lechon Manok', 'Liempo'];
   
@@ -80,11 +99,114 @@ export default function POSScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const categoryScrollRef = useRef<ScrollView>(null);
 
+  const COLLAPSE_KEY_RECEIVED = 'pos_ongoing_stocks_collapsed_received';
+  const COLLAPSE_KEY_NOT_RECEIVED = 'pos_ongoing_stocks_collapsed_not_received';
+
+  const idsEqual = (a: any, b: any) => String(a ?? '') === String(b ?? '');
+
+  useEffect(() => {
+    const loadCollapsePrefs = async () => {
+      try {
+        const [r, nr] = await Promise.all([
+          AsyncStorage.getItem(COLLAPSE_KEY_RECEIVED),
+          AsyncStorage.getItem(COLLAPSE_KEY_NOT_RECEIVED),
+        ]);
+        if (r != null) setCollapsedReceived(r === '1');
+        if (nr != null) setCollapsedNotReceived(nr === '1');
+        console.log('[ONGOING STOCKS] Loaded collapse prefs', { received: r, notReceived: nr });
+      } catch (e) {
+        console.error('[ONGOING STOCKS] Failed to load collapse prefs', e);
+      }
+    };
+
+    loadCollapsePrefs();
+  }, []);
+
+  const toggleCollapsedReceived = async () => {
+    setCollapsedReceived((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(COLLAPSE_KEY_RECEIVED, next ? '1' : '0').catch((e) =>
+        console.error('[ONGOING STOCKS] Failed to persist received collapse', e)
+      );
+      console.log('[ONGOING STOCKS] Toggled received collapse', next);
+      return next;
+    });
+  };
+
+  const toggleCollapsedNotReceived = async () => {
+    setCollapsedNotReceived((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(COLLAPSE_KEY_NOT_RECEIVED, next ? '1' : '0').catch((e) =>
+        console.error('[ONGOING STOCKS] Failed to persist not-received collapse', e)
+      );
+      console.log('[ONGOING STOCKS] Toggled not-received collapse', next);
+      return next;
+    });
+  };
+
+  const resolveBranchId = async () => {
+    const userRaw = await AsyncStorage.getItem('user');
+    let user = userRaw ? JSON.parse(userRaw) : null;
+
+    let branchId = getBranchIdFromUser(user);
+    if (branchId) {
+      console.log('[RESOLVE BRANCH ID] From storage user:', branchId);
+      return branchId;
+    }
+
+    try {
+      const meResponse = await api.get('me');
+      user = meResponse.data;
+      if (user) {
+        await AsyncStorage.setItem('user', JSON.stringify(user));
+      }
+      branchId = getBranchIdFromUser(user);
+      if (branchId) {
+        console.log('[RESOLVE BRANCH ID] From /me:', branchId);
+        return branchId;
+      }
+    } catch (error) {
+      console.error('[RESOLVE BRANCH ID] Unable to fetch /me:', error);
+    }
+
+    // Extra fallback: some APIs store branch assignment under staff endpoint
+    if (user?.id) {
+      try {
+        console.log('[RESOLVE BRANCH ID] Fallback: fetching staff by user ID', user.id);
+        const staffResponse = await api.get(`staff/${user.id}`);
+        const staffData = staffResponse.data;
+        branchId = getBranchIdFromUser(staffData);
+        if (branchId) {
+          const mergedUser = { ...user, branch_id: branchId, branchAssignments: staffData?.branchAssignments };
+          await AsyncStorage.setItem('user', JSON.stringify(mergedUser));
+          console.log('[RESOLVE BRANCH ID] From staff endpoint:', branchId);
+          return branchId;
+        }
+      } catch (error) {
+        console.error('[RESOLVE BRANCH ID] Unable to fetch staff assignment:', error);
+      }
+    }
+
+    console.log('[RESOLVE BRANCH ID] No branch ID resolved');
+    return null;
+  };
+
   const loadProducts = async () => {
     try {
       const { data } = await api.get('products');
+      
+      // Get user's branch ID
+      const branchId = await resolveBranchId();
+      
       const productsWithDetails = (data || []).map((item: any) => {
-        const quantity = (item.product_stocks || []).reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
+        // Find stock for user's branch and check if received
+        const branchStock = (item.product_stocks || []).find((s: any) =>
+          idsEqual(s.branch_id, branchId)
+        );
+        
+        const quantity = branchStock?.quantity || 0;
+        const minimumStock = branchStock?.minimum_stock ?? 0;
+        
         return {
           id: String(item.id),
           name: item.name,
@@ -92,14 +214,23 @@ export default function POSScreen() {
           type: 'Regular',
           quantity,
           price: Number(item.price || 0),
-          minStock: 1,
+          minStock: minimumStock,
           status: quantity <= 0 ? 'Out of Stock' : 'In Stock',
           icon: item.category === 'Liempo' ? 'lunch_dining' : 'fastfood',
           description: `Stock: ${quantity}`,
           popular: quantity > 20,
+          branchStock: branchStock,
+          ongoing_stocks: item.ongoing_stocks || [],
         };
       });
-      setProducts(productsWithDetails);
+      
+      // POS should only list products that are RECEIVED and have enough supply.
+      const availableProducts = productsWithDetails.filter((p: StockItem) => {
+        const qty = Number(p.quantity || 0);
+        return qty > 0;
+      });
+
+      setProducts(availableProducts);
     } catch (error) {
       console.error('Error loading products:', error);
       setProducts([]);
@@ -122,6 +253,117 @@ export default function POSScreen() {
     await loadProducts();
     setRefreshing(false);
   };
+
+  const loadOngoingStocks = async () => {
+    try {
+      const { data } = await api.get('products');
+      
+      // Get user's branch ID
+      const branchId = await resolveBranchId();
+      
+      const productsWithDetails = (data || []).map((item: any) => {
+        const branchStock = (item.product_stocks || []).find((s: any) =>
+          idsEqual(s.branch_id, branchId)
+        );
+        
+        const quantity = branchStock?.quantity || 0;
+        const minimumStock = branchStock?.minimum_stock ?? 0;
+
+        const deliveriesForBranch = (item.ongoing_stocks || []).filter((d: any) =>
+          idsEqual(d.branch_id, branchId)
+        );
+        const pendingQty = deliveriesForBranch
+          .filter((d: any) => !d.received_at)
+          .reduce((sum: number, d: any) => sum + Number(d.quantity || 0), 0);
+        const lastDeliveryAt =
+          deliveriesForBranch
+            .map((d: any) => d.restocked_at)
+            .filter(Boolean)
+            .sort()
+            .slice(-1)[0] || null;
+        
+        return {
+          id: String(item.id),
+          name: item.name,
+          category: item.category || 'Product',
+          type: 'Regular',
+          quantity,
+          price: Number(item.price || 0),
+          minStock: minimumStock,
+          status: quantity <= 0 ? 'Out of Stock' : 'In Stock',
+          icon: item.category === 'Liempo' ? 'lunch_dining' : 'fastfood',
+          description: `Stock: ${quantity}`,
+          popular: quantity > 20,
+          branchStock: branchStock,
+          ongoing_stocks: item.ongoing_stocks || [],
+          pendingQty,
+          lastDeliveryAt,
+        };
+      });
+      
+      // Show all stocks (both received and not received)
+      setOngoingStocks(productsWithDetails);
+      setOngoingStocksModalVisible(true);
+    } catch (error) {
+      console.error('Error loading ongoing stocks:', error);
+      Alert.alert('Error', 'Failed to load stocks');
+    }
+  };
+
+  const markAsReceived = async (item: StockItem) => {
+    try {
+      const branchIdFromUser = await resolveBranchId();
+      const branchId = branchIdFromUser ?? item.branchStock?.branch_id;
+      
+      if (!branchId) {
+        Alert.alert('Error', 'No branch assigned');
+        return;
+      }
+
+      await api.post(`/products/${item.id}/toggle-received`, {
+        branch_id: branchId
+      });
+
+      await loadOngoingStocks();
+      await loadProducts();
+      Alert.alert('Success', 'Stock marked as received');
+    } catch (error: any) {
+      Alert.alert('Error', error.response?.data?.message || 'Failed to update received status');
+    }
+  };
+
+  const OngoingStockRow = ({ item }: { item: StockItem }) => (
+    <View className="bg-gray-50 rounded-xl p-4 mb-3 border border-gray-200">
+      <View className="flex-row justify-between items-start mb-2">
+        <View className="flex-1">
+          <Text className="text-gray-900 font-bold text-base">{item.name}</Text>
+          <Text className="text-gray-500 text-xs">{item.category}</Text>
+        </View>
+        <View className={`px-3 py-1 rounded-lg ${Number(item.pendingQty || 0) > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
+          <Text className={`text-xs font-bold ${Number(item.pendingQty || 0) > 0 ? 'text-orange-700' : 'text-green-700'}`}>
+            {Number(item.pendingQty || 0) > 0 ? 'Pending' : 'No Pending'}
+          </Text>
+        </View>
+      </View>
+      <View className="flex-row justify-between items-center mt-2">
+        <View>
+          <Text className="text-gray-500 text-xs">Quantity</Text>
+          <Text className="text-gray-900 font-bold text-lg">{item.quantity}</Text>
+        </View>
+        {Number(item.pendingQty || 0) > 0 && (
+          <TouchableOpacity
+            onPress={() => markAsReceived(item)}
+            className="bg-green-500 py-2 px-4 rounded-lg"
+          >
+            <View className="flex-row items-center">
+              <Icon name="check" size={16} color="white" />
+              <Text className="text-white font-bold text-sm ml-1">Mark Received</Text>
+            </View>
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
 
   const zoomIn = () => {
     Animated.timing(scaleAnim, {
@@ -484,47 +726,59 @@ export default function POSScreen() {
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-      <ScrollView 
-        className="flex-1 bg-gray-50"
-        refreshControl={
-          <RefreshControl 
-            refreshing={refreshing} 
-            onRefresh={onRefresh} 
-            colors={['#DC2626']}
-            tintColor="#DC2626"
-          />
-        }
-      >
-        <StatusBar style="dark" />
-        
-        <Animated.View className="flex-1" style={{ opacity: fadeAnim }}>
-          {/* HEADER - Fixed */}
-          <View className="bg-red-600 pt-12 pb-10 px-6 rounded-b-3xl shadow-lg">
-            <View className="flex-row items-center justify-center mb-2">
-              <Icon name="restaurant" size={32} color="white" />
-              <Text className="text-3xl font-bold text-white ml-2">
-                New Moon Lechon
+      <View className="flex-1">
+        <ScrollView 
+          className="flex-1 bg-gray-50"
+          refreshControl={
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={onRefresh} 
+              colors={['#DC2626']}
+              tintColor="#DC2626"
+            />
+          }
+        >
+          <StatusBar style="dark" />
+          
+          <Animated.View className="flex-1" style={{ opacity: fadeAnim }}>
+            {/* HEADER - Fixed */}
+            <View className="bg-red-600 pt-12 pb-10 px-6 rounded-b-3xl shadow-lg">
+              <View className="flex-row items-center justify-center mb-2">
+                <Icon name="restaurant" size={32} color="white" />
+                <Text className="text-3xl font-bold text-white ml-2">
+                  New Moon Lechon
+                </Text>
+              </View>
+              <Text className="text-center text-red-200 text-sm font-medium">
+                Point of Sales System
               </Text>
             </View>
-            <Text className="text-center text-red-200 text-sm font-medium">
-              Point of Sales System
-            </Text>
-          </View>
 
-          {/* Main ScrollView with proper keyboard handling */}
-          <KeyboardAvoidingView 
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            className="flex-1"
-            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
-          >
-            <ScrollView 
-              ref={scrollViewRef}
-              showsVerticalScrollIndicator={false}
+            {/* Main ScrollView with proper keyboard handling */}
+            <KeyboardAvoidingView 
+              behavior={Platform.OS === "ios" ? "padding" : undefined}
               className="flex-1"
-              contentContainerStyle={{ flexGrow: 1, minHeight: screenHeight, paddingBottom: Math.max(120, insets.bottom + 100) }}
-              keyboardShouldPersistTaps="handled"
+              keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
             >
+              <ScrollView 
+                ref={scrollViewRef}
+                showsVerticalScrollIndicator={false}
+                className="flex-1"
+                contentContainerStyle={{ flexGrow: 1, minHeight: screenHeight, paddingBottom: Math.max(120, insets.bottom + 100) }}
+                keyboardShouldPersistTaps="handled"
+              >
               <View className="p-5">
+                {/* Ongoing Stocks Button */}
+                <TouchableOpacity
+                  onPress={loadOngoingStocks}
+                  className="bg-blue-600 py-3 px-4 rounded-xl mb-4 shadow-md"
+                >
+                  <View className="flex-row items-center justify-center">
+                    <Icon name="inventory" size={20} color="white" />
+                    <Text className="text-white font-bold text-base ml-2">Ongoing Stocks</Text>
+                  </View>
+                </TouchableOpacity>
+
                 {/* CATEGORY FILTER - Horizontal ScrollView */}
                 <View className="mb-6">
                   <ScrollView 
@@ -767,6 +1021,110 @@ export default function POSScreen() {
           </KeyboardAvoidingView>
         </Animated.View>
       </ScrollView>
+      
+      {/* Ongoing Stocks Modal */}
+      <Modal
+        visible={ongoingStocksModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setOngoingStocksModalVisible(false)}
+      >
+        <View className="flex-1 bg-black/50 justify-center items-center">
+          <View className="bg-white rounded-2xl w-11/12 max-h-4/5">
+            <View className="bg-red-600 p-4 rounded-t-2xl flex-row justify-between items-center">
+              <Text className="text-white font-bold text-lg">Ongoing Stocks</Text>
+              <TouchableOpacity onPress={() => setOngoingStocksModalVisible(false)}>
+                <Icon name="close" size={28} color="white" />
+              </TouchableOpacity>
+            </View>
+            {(() => {
+              const receivedStocks = ongoingStocks.filter((s) => Number(s.pendingQty || 0) <= 0);
+              const notReceivedStocks = ongoingStocks.filter((s) => Number(s.pendingQty || 0) > 0);
+
+              return (
+                <ScrollView className="p-4 max-h-96">
+                  {/* NOT RECEIVED */}
+                  <TouchableOpacity
+                    onPress={toggleCollapsedNotReceived}
+                    className="bg-gray-100 border border-gray-200 rounded-xl px-4 py-3 mb-3"
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <View className="flex-row items-center">
+                        <View className="bg-orange-500/15 rounded-lg p-2 mr-3">
+                          <Icon name="pending-actions" size={18} color="#F97316" />
+                        </View>
+                        <View>
+                          <Text className="text-gray-900 font-bold">Not Received</Text>
+                          <Text className="text-gray-500 text-xs">{notReceivedStocks.length} item(s)</Text>
+                        </View>
+                      </View>
+                      <Icon
+                        name={collapsedNotReceived ? 'expand-more' : 'expand-less'}
+                        size={24}
+                        color="#6B7280"
+                      />
+                    </View>
+                  </TouchableOpacity>
+
+                  {!collapsedNotReceived && (
+                    <View className="mb-4">
+                      {notReceivedStocks.length === 0 ? (
+                        <View className="py-6 items-center bg-white rounded-xl border border-gray-100">
+                          <Text className="text-gray-500">No pending stocks</Text>
+                        </View>
+                      ) : (
+                        notReceivedStocks.map((item) => <OngoingStockRow key={item.id} item={item} />)
+                      )}
+                    </View>
+                  )}
+
+                  {/* RECEIVED */}
+                  <TouchableOpacity
+                    onPress={toggleCollapsedReceived}
+                    className="bg-gray-100 border border-gray-200 rounded-xl px-4 py-3 mb-3"
+                  >
+                    <View className="flex-row items-center justify-between">
+                      <View className="flex-row items-center">
+                        <View className="bg-green-500/15 rounded-lg p-2 mr-3">
+                          <Icon name="inventory" size={18} color="#10B981" />
+                        </View>
+                        <View>
+                          <Text className="text-gray-900 font-bold">Received</Text>
+                          <Text className="text-gray-500 text-xs">{receivedStocks.length} item(s)</Text>
+                        </View>
+                      </View>
+                      <Icon
+                        name={collapsedReceived ? 'expand-more' : 'expand-less'}
+                        size={24}
+                        color="#6B7280"
+                      />
+                    </View>
+                  </TouchableOpacity>
+
+                  {!collapsedReceived && (
+                    <View className="mb-2">
+                      {receivedStocks.length === 0 ? (
+                        <View className="py-6 items-center bg-white rounded-xl border border-gray-100">
+                          <Text className="text-gray-500">No received stocks yet</Text>
+                        </View>
+                      ) : (
+                        receivedStocks.map((item) => <OngoingStockRow key={item.id} item={item} />)
+                      )}
+                    </View>
+                  )}
+
+                  {ongoingStocks.length === 0 && (
+                    <View className="py-8 items-center">
+                      <Text className="text-gray-500">No stocks available</Text>
+                    </View>
+                  )}
+                </ScrollView>
+              );
+            })()}
+          </View>
+        </View>
+      </Modal>
+      </View>
     </TouchableWithoutFeedback>
   );
 }

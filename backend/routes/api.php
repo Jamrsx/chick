@@ -29,6 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Products
     Route::apiResource('products', ProductController::class);
     Route::post('/products/{id}/restock', [ProductController::class, 'restock']);
+    Route::post('/products/{id}/toggle-received', [ProductController::class, 'toggleReceived']);
     Route::get('/products/low-stock/all', [ProductController::class, 'getLowStock']);
     
     // Staff

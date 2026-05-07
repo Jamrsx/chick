@@ -8,7 +8,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
  * Make sure this is your PC IPv4 address
  */
 const API_PORT = 8000;
-const DEFAULT_LAN_IP = "192.168.1.22";
+const DEFAULT_LAN_IP = "192.168.1.47";
+
 
 const normalizeBase = (url: string) => url.replace(/\/+$/, "");
 

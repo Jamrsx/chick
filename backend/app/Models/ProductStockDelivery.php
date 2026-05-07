@@ -5,7 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class ProductStock extends Model
+class ProductStockDelivery extends Model
 {
     use HasFactory;
 
@@ -14,13 +14,13 @@ class ProductStock extends Model
         'branch_id',
         'quantity',
         'restocked_at',
-        'minimum_stock',
-        'received',
+        'received_at',
+        'received_by',
     ];
 
     protected $casts = [
         'restocked_at' => 'datetime',
-        'received' => 'boolean',
+        'received_at' => 'datetime',
     ];
 
     public function product()
@@ -32,4 +32,10 @@ class ProductStock extends Model
     {
         return $this->belongsTo(Branch::class);
     }
+
+    public function receiver()
+    {
+        return $this->belongsTo(User::class, 'received_by');
+    }
 }
+

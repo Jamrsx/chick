@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
     ActivityIndicator,
+    Alert,
     Dimensions,
     RefreshControl,
     ScrollView,
@@ -26,10 +27,12 @@ type StockItem = {
   price: number;
   minStock: number;
   status: StockStatus;
-  product_stocks?: { id: string; branch_id: string | number; quantity: number; minimum_stock: number; branch?: { id: string; name?: string } }[];
+  product_stocks?: { id: string; branch_id: string | number; quantity: number; minimum_stock: number; received: boolean; branch?: { id: string; name?: string } }[];
   icon?: string;
   description?: string;
   popular?: boolean;
+  received?: boolean;
+  branchStock?: { id: string; branch_id: string | number; quantity: number; minimum_stock: number; received: boolean };
 };
 
 const formatLocalDate = (date = new Date()) => {
@@ -101,9 +104,16 @@ const DashboardScreen = () => {
       });
 
       const mappedStock: StockItem[] = (productsRes.data || []).map((item: any) => {
-        const quantity = (item.product_stocks || []).reduce((sum: number, s: any) => sum + (s.quantity || 0), 0);
-        const minStock = (item.product_stocks || []).reduce((min: number, s: any) => Math.min(min, s.minimum_stock || 0), 0);
-        const status: StockStatus = quantity <= 0 ? 'Out of Stock' : quantity <= (minStock || 1) ? 'Low Stock' : 'In Stock';
+        // Find stock for user's branch
+        const branchStock = (item.product_stocks || []).find((s: any) => 
+          s.branch_id === branchId
+        );
+        
+        const isReceived = branchStock?.received || false;
+        const quantity = branchStock?.quantity || 0;
+        const minStock = branchStock?.minimum_stock || 0;
+        const status: StockStatus = quantity <= 0 ? 'Out of Stock' : quantity <= minStock ? 'Low Stock' : 'In Stock';
+        
         return {
           id: String(item.id),
           name: item.name,
@@ -111,8 +121,11 @@ const DashboardScreen = () => {
           type: 'Regular',
           quantity,
           price: Number(item.price || 0),
-          minStock: minStock || 1,
+          minStock,
           status,
+          received: isReceived,
+          branchStock: branchStock,
+          product_stocks: item.product_stocks,
         };
       });
       setStockData(mappedStock);
@@ -302,17 +315,6 @@ const DashboardScreen = () => {
                   <Text className="text-lg font-bold text-gray-700" numberOfLines={1}>{item.minStock}</Text>
                 </View>
               </View>
-
-              {item.quantity <= item.minStock && (
-                <View className="mt-3 pt-2 border-t border-yellow-200 bg-yellow-50 rounded-lg p-2">
-                  <View className="flex-row items-center">
-                    <Icon name="warning" size={14} color="#F59E0B" />
-                    <Text className="text-yellow-700 text-xs font-medium ml-2 flex-1">
-                      Stock at minimum level - reorder recommended
-                    </Text>
-                  </View>
-                </View>
-              )}
             </View>
           ))}
         </View>
