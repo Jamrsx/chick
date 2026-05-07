@@ -57,9 +57,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/attendance', [AttendanceController::class, 'index']);
     Route::post('/attendance/time-in', [AttendanceController::class, 'timeIn']);
     Route::put('/attendance/{id}/time-out', [AttendanceController::class, 'timeOut']);
+    Route::get('/attendance/payroll/report/monthly', [AttendanceController::class, 'getPayrollMonthly']);
     Route::get('/attendance/payroll/report', [AttendanceController::class, 'getPayroll']);
     
     // Sales - Custom routes MUST come before apiResource
+    Route::get('/sales/tracker', [SaleController::class, 'tracker']);
     Route::get('/sales/product-incentives', [SaleController::class, 'getProductIncentives']);
     Route::get('/sales/product-incentives/daily', [SaleController::class, 'getDailyProductIncentives']);
     Route::get('/sales/summary/overview', [SaleController::class, 'getSalesSummary']);

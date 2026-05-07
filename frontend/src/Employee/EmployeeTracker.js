@@ -126,10 +126,10 @@ function EmployeeTracker() {
       const results = await Promise.allSettled([
         api.get("/staff"),
         api.get("/attendance", { params: { date: selectedDate } }),
-        api.get("/sales", { params: { date: selectedDate } }),
+        api.get("/sales/tracker", { params: { date: selectedDate } }),
       ]);
 
-      const labels = ["GET /staff", "GET /attendance", "GET /sales"];
+      const labels = ["GET /staff", "GET /attendance", "GET /sales/tracker"];
       const rejectedIdx = results.findIndex((r) => r.status === "rejected");
       if (rejectedIdx !== -1) {
         const reason = results[rejectedIdx].reason;
@@ -189,95 +189,62 @@ function EmployeeTracker() {
       });
 
       // Sales aggregation per staff (POS checkout)
-      const sales = salesRes.data || [];
+      const salesTracker = salesRes.data || {};
+      const checkoutRowsRaw = salesTracker.checkoutRows || [];
+      const staffAggRaw = salesTracker.staffAgg || {};
+      const topProductsRaw = salesTracker.topProducts || {};
       const byStaff = new Map();
 
-      // Flat list of each checkout (transaction-level)
-      const checkoutRows = sales
-        .slice()
-        .sort((a, b) => new Date(b.created_at || b.sale_date || 0) - new Date(a.created_at || a.sale_date || 0))
-        .map((sale, idx) => {
-          const userId = sale.user_id || sale.user?.id;
-          const staffUser = staffById.get(userId) || sale.user;
-          const employee = safeName(staffUser);
-          const itemsCount = (sale.items || []).reduce((sum, it) => sum + Number(it.quantity || 0), 0);
-          const senior = Boolean(sale.senior_discount);
-          const discountAmount = Number(sale.discount_amount || 0);
-
-          return {
-            id: sale.id || `sale-${idx}`,
-            invoice: sale.invoice_number || `INV-${sale.id || idx + 1}`,
-            employee,
-            customerName: sale.customer_name || "-",
-            createdAt: sale.created_at || sale.sale_date || null,
-            itemsCount,
-            subtotal: Number(sale.subtotal || 0),
-            discountAmount,
-            seniorDiscount: senior,
-            total: Number(sale.total || 0),
-            cashCollected: Number(sale.cash_collected || 0),
-            changeGiven: Number(sale.change_given ?? sale.changeGiven ?? 0),
-          };
-        });
-
-      for (const sale of sales) {
-        const userId = sale.user_id || sale.user?.id;
-        const staffUser = staffById.get(userId) || sale.user;
+      // Flat list of each checkout (transaction-level) - already pre-aggregated by backend
+      const checkoutRows = checkoutRowsRaw.map((row, idx) => {
+        const userId = row.user_id;
+        const staffUser = staffById.get(userId);
         const employee = safeName(staffUser);
+        const senior = Boolean(row.senior_discount);
+        const discountAmount = Number(row.discount_amount || 0);
 
-        if (!byStaff.has(employee)) {
-          byStaff.set(employee, {
-            id: employee,
-            employee,
-            checkoutCount: 0,
-            totalItemsSold: 0,
-            grossTotal: 0,
-            cashCollected: 0,
-            changeGiven: 0,
-            seniorDiscountCount: 0,
-            seniorDiscountTotal: 0,
-            productCounts: new Map(),
-          });
-        }
-
-        const agg = byStaff.get(employee);
-        agg.checkoutCount += 1;
-        agg.grossTotal += Number(sale.total || 0);
-        agg.cashCollected += Number(sale.cash_collected || 0);
-        // tolerate backend naming
-        const change = Number(sale.change_given ?? sale.changeGiven ?? 0);
-        agg.changeGiven += change;
-
-        const hasSeniorDiscount = Boolean(sale.senior_discount);
-        const discountAmount = Number(sale.discount_amount || 0);
-        if (hasSeniorDiscount) {
-          agg.seniorDiscountCount += 1;
-          agg.seniorDiscountTotal += discountAmount;
-        }
-
-        for (const item of sale.items || []) {
-          const qty = Number(item.quantity || 0);
-          agg.totalItemsSold += qty;
-          const productName = item.product?.name || `Product ${item.product_id}`;
-          agg.productCounts.set(productName, (agg.productCounts.get(productName) || 0) + qty);
-        }
-      }
-
-      const salesRows = Array.from(byStaff.values()).map((row, idx) => {
-        let topCategory = "N/A";
-        let best = 0;
-        for (const [productName, qty] of row.productCounts.entries()) {
-          if (qty > best) {
-            best = qty;
-            topCategory = productName;
-          }
-        }
         return {
-          ...row,
-          id: idx + 1,
-          topCategory,
+          id: row.id || `sale-${idx}`,
+          invoice: row.invoice_number || `INV-${row.id || idx + 1}`,
+          employee,
+          customerName: row.customer_name || "-",
+          createdAt: row.created_at || row.sale_date || null,
+          itemsCount: Number(row.items_count || 0),
+          subtotal: Number(row.subtotal || 0),
+          discountAmount,
+          seniorDiscount: senior,
+          total: Number(row.total || 0),
+          cashCollected: Number(row.cash_collected || 0),
+          changeGiven: Number(row.change_given ?? 0),
         };
       });
+
+      // Staff aggregates from backend
+      Object.entries(staffAggRaw).forEach(([userIdStr, aggRow]) => {
+        const userId = Number(userIdStr);
+        const staffUser = staffById.get(userId);
+        const employee = safeName(staffUser);
+        const topCategory = topProductsRaw?.[userIdStr] || "N/A";
+
+        byStaff.set(employee, {
+          id: employee,
+          employee,
+          checkoutCount: Number(aggRow.checkout_count || 0),
+          totalItemsSold: Number(aggRow.total_items_sold || 0),
+          grossTotal: Number(aggRow.gross_total || 0),
+          cashCollected: Number(aggRow.cash_collected || 0),
+          changeGiven: Number(aggRow.change_given || 0),
+          seniorDiscountCount: Number(aggRow.senior_discount_count || 0),
+          seniorDiscountTotal: Number(aggRow.senior_discount_total || 0),
+          topCategory,
+        });
+      });
+
+      const salesRows = Array.from(byStaff.values()).map((row, idx) => ({
+        ...row,
+        id: idx + 1,
+        topCategory: row.topCategory || "N/A",
+      }));
 
       // Basic performance metrics (computed from attendance + sales for the selected date)
       const perfByName = new Map();

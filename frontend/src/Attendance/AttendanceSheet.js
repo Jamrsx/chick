@@ -167,38 +167,42 @@ function AttendanceAdmin() {
     return `${hours}:${minutesStr} ${ampm}`;
   };
 
-  // Load attendance data for the entire month by fetching daily data
+  // Load attendance data for the entire month (fast backend endpoint; daily fallback)
   async function loadAttendanceData(forceRefresh = true) {
     setIsLoading(true);
     try {
       const [year, month] = selectedMonth.split('-');
-      const yearNum = parseInt(year);
-      const monthNum = parseInt(month);
-      
-      // Get all days in the selected month
-      const daysInMonth = dayjs(selectedMonth).daysInMonth();
-      const allAttendanceData = [];
-      
-      // Fetch attendance data for each day in the month
-      for (let day = 1; day <= daysInMonth; day++) {
-        const dateStr = `${year}-${month.padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-        try {
-          const { data } = await api.get("/attendance/payroll/report", {
-            params: { date: dateStr },
-          });
-          
-          if (data && data.length > 0) {
-            // Ensure each record has the correct date
-            const recordsWithDate = data.map(record => ({
-              ...record,
-              date: record.date || dateStr // Use the date we're fetching for
-            }));
-            allAttendanceData.push(...recordsWithDate);
-          }
-        } catch (error) {
-          console.warn(`No attendance data for ${dateStr}:`, error.message);
-          // Continue with next day even if current day has no data
-        }
+
+      let allAttendanceData = [];
+      try {
+        // ✅ Fast path: 1 request for the whole month
+        const { data } = await api.get("/attendance/payroll/report/monthly", {
+          params: { month: selectedMonth },
+        });
+        allAttendanceData = Array.isArray(data) ? data : [];
+        console.log("[AttendanceSheet] monthly payroll loaded", {
+          month: selectedMonth,
+          rows: allAttendanceData.length,
+        });
+      } catch (error) {
+        // Fallback (older backend): per-day fetching
+        console.log("[AttendanceSheet] monthly endpoint failed; fallback to daily", error?.response?.data || error?.message);
+
+        const daysInMonth = dayjs(selectedMonth).daysInMonth();
+        const dailyResults = await Promise.all(
+          Array.from({ length: daysInMonth }, (_, i) => i + 1).map(async (day) => {
+            const dateStr = `${year}-${month.padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+            try {
+              const { data } = await api.get("/attendance/payroll/report", { params: { date: dateStr } });
+              if (!data || data.length === 0) return [];
+              return data.map((record) => ({ ...record, date: record.date || dateStr }));
+            } catch (err) {
+              return [];
+            }
+          })
+        );
+
+        allAttendanceData = dailyResults.flat();
       }
       
       const mapped = (allAttendanceData || []).map((record, index) => {
@@ -231,9 +235,6 @@ function AttendanceAdmin() {
                       record.staff_id || 
                       record.id || 
                       null;
-
-        console.log('[ATTENDANCE MAPPING] Record:', record);
-        console.log('[ATTENDANCE MAPPING] Extracted userId:', userId);
 
         return {
           id: record.attendance_id || index + 1,

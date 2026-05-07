@@ -32,6 +32,116 @@ class SaleController extends Controller
         return response()->json($sales);
     }
 
+    /**
+     * Lightweight endpoint for EmployeeTracker (fast, small payload).
+     * Returns:
+     *  - checkoutRows: transaction-level rows with itemsCount
+     *  - staffAgg: per-user aggregates + topProductName
+     *
+     * Query params:
+     *  - date (required): YYYY-MM-DD
+     *  - branch_id (optional)
+     */
+    public function tracker(Request $request)
+    {
+        $validated = $request->validate([
+            'date' => 'required|date',
+            'branch_id' => 'nullable|exists:branches,id',
+        ]);
+
+        $date = $validated['date'];
+        $branchId = $validated['branch_id'] ?? null;
+
+        $salesQuery = DB::table('sales')
+            ->whereDate('sale_date', $date);
+
+        if ($branchId) {
+            $salesQuery->where('branch_id', $branchId);
+        }
+
+        // Checkout rows (transaction list) + items count
+        $checkoutRows = $salesQuery
+            ->leftJoin('sale_items', 'sales.id', '=', 'sale_items.sale_id')
+            ->select(
+                'sales.id',
+                'sales.invoice_number',
+                'sales.user_id',
+                'sales.branch_id',
+                'sales.customer_name',
+                'sales.created_at',
+                'sales.sale_date',
+                'sales.subtotal',
+                'sales.discount_amount',
+                'sales.senior_discount',
+                'sales.total',
+                'sales.cash_collected',
+                'sales.change_given',
+                DB::raw('COALESCE(SUM(sale_items.quantity), 0) as items_count')
+            )
+            ->groupBy(
+                'sales.id',
+                'sales.invoice_number',
+                'sales.user_id',
+                'sales.branch_id',
+                'sales.customer_name',
+                'sales.created_at',
+                'sales.sale_date',
+                'sales.subtotal',
+                'sales.discount_amount',
+                'sales.senior_discount',
+                'sales.total',
+                'sales.cash_collected',
+                'sales.change_given'
+            )
+            ->orderBy('sales.created_at', 'desc')
+            ->get();
+
+        // Per-staff aggregates
+        $staffAgg = DB::table('sales')
+            ->leftJoin('sale_items', 'sales.id', '=', 'sale_items.sale_id')
+            ->whereDate('sales.sale_date', $date)
+            ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
+            ->select(
+                'sales.user_id',
+                DB::raw('COUNT(DISTINCT sales.id) as checkout_count'),
+                DB::raw('COALESCE(SUM(sale_items.quantity), 0) as total_items_sold'),
+                DB::raw('COALESCE(SUM(sales.total), 0) as gross_total'),
+                DB::raw('COALESCE(SUM(sales.cash_collected), 0) as cash_collected'),
+                DB::raw('COALESCE(SUM(sales.change_given), 0) as change_given'),
+                DB::raw('COALESCE(SUM(CASE WHEN sales.senior_discount = 1 THEN 1 ELSE 0 END), 0) as senior_discount_count'),
+                DB::raw('COALESCE(SUM(CASE WHEN sales.senior_discount = 1 THEN sales.discount_amount ELSE 0 END), 0) as senior_discount_total')
+            )
+            ->groupBy('sales.user_id')
+            ->get()
+            ->keyBy('user_id');
+
+        // Top product per staff for the day (by quantity)
+        $topProducts = DB::table('sale_items')
+            ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
+            ->join('products', 'sale_items.product_id', '=', 'products.id')
+            ->whereDate('sales.sale_date', $date)
+            ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
+            ->select(
+                'sales.user_id',
+                'products.name as product_name',
+                DB::raw('SUM(sale_items.quantity) as qty')
+            )
+            ->groupBy('sales.user_id', 'products.name')
+            ->orderBy('qty', 'desc')
+            ->get()
+            ->groupBy('user_id')
+            ->map(function ($rows) {
+                $first = $rows->first();
+                return $first ? $first->product_name : null;
+            });
+
+        return response()->json([
+            'checkoutRows' => $checkoutRows,
+            'staffAgg' => $staffAgg,
+            'topProducts' => $topProducts,
+        ]);
+    }
+
     public function store(Request $request)
     {
         $validated = $request->validate([
