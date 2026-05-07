@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Tag, Progress, DatePicker as AntDatePicker, Button } from "antd";
+import { Tag, Progress, DatePicker as AntDatePicker, Button, Pagination } from "antd";
 import { 
   CalendarOutlined, 
   CheckCircleOutlined, 
@@ -23,6 +23,8 @@ function EmployeeTracker() {
   const [selectedDate, setSelectedDate] = useState(dayjs().format("YYYY-MM-DD"));
   const [attendanceData, setAttendanceData] = useState([]);
   const [staffSalesData, setStaffSalesData] = useState([]);
+  const [posCheckoutData, setPosCheckoutData] = useState([]);
+  const [posCheckoutPage, setPosCheckoutPage] = useState(1);
   const [performanceData, setPerformanceData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -190,6 +192,34 @@ function EmployeeTracker() {
       const sales = salesRes.data || [];
       const byStaff = new Map();
 
+      // Flat list of each checkout (transaction-level)
+      const checkoutRows = sales
+        .slice()
+        .sort((a, b) => new Date(b.created_at || b.sale_date || 0) - new Date(a.created_at || a.sale_date || 0))
+        .map((sale, idx) => {
+          const userId = sale.user_id || sale.user?.id;
+          const staffUser = staffById.get(userId) || sale.user;
+          const employee = safeName(staffUser);
+          const itemsCount = (sale.items || []).reduce((sum, it) => sum + Number(it.quantity || 0), 0);
+          const senior = Boolean(sale.senior_discount);
+          const discountAmount = Number(sale.discount_amount || 0);
+
+          return {
+            id: sale.id || `sale-${idx}`,
+            invoice: sale.invoice_number || `INV-${sale.id || idx + 1}`,
+            employee,
+            customerName: sale.customer_name || "-",
+            createdAt: sale.created_at || sale.sale_date || null,
+            itemsCount,
+            subtotal: Number(sale.subtotal || 0),
+            discountAmount,
+            seniorDiscount: senior,
+            total: Number(sale.total || 0),
+            cashCollected: Number(sale.cash_collected || 0),
+            changeGiven: Number(sale.change_given ?? sale.changeGiven ?? 0),
+          };
+        });
+
       for (const sale of sales) {
         const userId = sale.user_id || sale.user?.id;
         const staffUser = staffById.get(userId) || sale.user;
@@ -204,6 +234,8 @@ function EmployeeTracker() {
             grossTotal: 0,
             cashCollected: 0,
             changeGiven: 0,
+            seniorDiscountCount: 0,
+            seniorDiscountTotal: 0,
             productCounts: new Map(),
           });
         }
@@ -215,6 +247,13 @@ function EmployeeTracker() {
         // tolerate backend naming
         const change = Number(sale.change_given ?? sale.changeGiven ?? 0);
         agg.changeGiven += change;
+
+        const hasSeniorDiscount = Boolean(sale.senior_discount);
+        const discountAmount = Number(sale.discount_amount || 0);
+        if (hasSeniorDiscount) {
+          agg.seniorDiscountCount += 1;
+          agg.seniorDiscountTotal += discountAmount;
+        }
 
         for (const item of sale.items || []) {
           const qty = Number(item.quantity || 0);
@@ -266,15 +305,17 @@ function EmployeeTracker() {
 
       const attendanceData = attendance;
       const staffSalesData = salesRows;
+      const posCheckoutData = checkoutRows;
       const performanceData = Array.from(perfByName.values());
 
       // Update state and cache
       setAttendanceData(attendanceData);
       setStaffSalesData(staffSalesData);
+      setPosCheckoutData(posCheckoutData);
       setPerformanceData(performanceData);
       
       // Cache the fetched data (30 seconds TTL)
-      setCache(cacheKey, { attendanceData, staffSalesData, performanceData }, 30 * 1000);
+      setCache(cacheKey, { attendanceData, staffSalesData, posCheckoutData, performanceData }, 30 * 1000);
     } catch (e) {
       console.error('Background fetch failed:', e);
       // Don't show error for background fetch failures
@@ -301,6 +342,21 @@ function EmployeeTracker() {
   const filteredSales = staffSalesData.filter(item =>
     item.employee.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const filteredPosCheckouts = posCheckoutData.filter((row) => {
+    const q = searchTerm.toLowerCase();
+    if (!q) return true;
+    return (
+      row.employee.toLowerCase().includes(q) ||
+      String(row.invoice || "").toLowerCase().includes(q) ||
+      String(row.customerName || "").toLowerCase().includes(q)
+    );
+  });
+
+  const POS_PAGE_SIZE = 5;
+  const posCheckoutTotal = filteredPosCheckouts.length;
+  const posCheckoutStart = (posCheckoutPage - 1) * POS_PAGE_SIZE;
+  const pagedPosCheckouts = filteredPosCheckouts.slice(posCheckoutStart, posCheckoutStart + POS_PAGE_SIZE);
 
   const filteredPerformance = performanceData.filter(item =>
     item.employee.toLowerCase().includes(searchTerm.toLowerCase())
@@ -432,12 +488,40 @@ function EmployeeTracker() {
       render: (_, record) => <span className="text-blue-600 font-semibold">{formatCurrency(record.cashCollected - record.changeGiven)}</span>,
     },
     {
+      title: "SR. DISCOUNT",
+      key: "seniorDiscount",
+      render: (_, record) => (
+        record.seniorDiscountCount > 0 ? (
+          <div className="flex flex-col">
+            <Tag color="green" className="w-fit">Yes ({record.seniorDiscountCount})</Tag>
+            <span className="text-xs text-gray-500">- {formatCurrency(record.seniorDiscountTotal)}</span>
+          </div>
+        ) : (
+          <Tag color="default">No</Tag>
+        )
+      ),
+    },
+    {
       title: "TOP CATEGORY",
       dataIndex: "topCategory",
       key: "topCategory",
       render: (category) => <Tag color="blue">{category}</Tag>,
     },
   ];
+
+  const formatDateTime = (value) => {
+    if (!value) return "-";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString("en-PH", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
+  };
 
   // Performance Table Columns
   const performanceColumns = [
@@ -728,6 +812,16 @@ function EmployeeTracker() {
                           <span className="text-blue-600 font-semibold">{formatCurrency(record.cashCollected - record.changeGiven)}</span>
                         </td>
                         <td className="px-4 py-3">
+                          {record.seniorDiscountCount > 0 ? (
+                            <div className="flex flex-col">
+                              <Tag color="green" className="w-fit">Yes ({record.seniorDiscountCount})</Tag>
+                              <span className="text-xs text-gray-500">- {formatCurrency(record.seniorDiscountTotal)}</span>
+                            </div>
+                          ) : (
+                            <Tag color="default">No</Tag>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
                           <Tag color="blue">{record.topCategory}</Tag>
                         </td>
                       </tr>
@@ -750,6 +844,90 @@ function EmployeeTracker() {
                 )}
               </table>
             </div>
+          </div>
+
+          {/* POS Checkout Transactions */}
+          <div className="bg-white rounded-lg border border-gray-200 mb-6 overflow-hidden">
+            <div className="bg-gray-50 border-b border-gray-200 px-6 py-3">
+              <div className="flex items-center gap-2">
+                <ShoppingCartOutlined className="text-emerald-600" />
+                <span className="font-semibold text-gray-700">POS Checkout Transactions</span>
+                <Tag color="geekblue" className="ml-2">
+                  {filteredPosCheckouts.length} Checkout(s)
+                </Tag>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">NO.</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Invoice</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Employee</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Customer</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Date/Time</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Items</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Subtotal</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">SR. Discount</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Total</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Cash</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Change</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {pagedPosCheckouts.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="text-center py-12 text-gray-500">
+                        No checkout transactions found.
+                      </td>
+                    </tr>
+                  ) : (
+                    pagedPosCheckouts.map((row, idx) => (
+                      <tr key={row.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-gray-500">{posCheckoutStart + idx + 1}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-700">{row.invoice}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2">
+                            <UserOutlined className="text-blue-500" />
+                            <span className="font-medium">{row.employee}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-700">{row.customerName}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatDateTime(row.createdAt)}</td>
+                        <td className="px-4 py-3 font-semibold text-gray-800">{row.itemsCount}</td>
+                        <td className="px-4 py-3 text-gray-800">{formatCurrency(row.subtotal)}</td>
+                        <td className="px-4 py-3">
+                          {row.seniorDiscount ? (
+                            <div className="flex flex-col">
+                              <Tag color="green" className="w-fit">Yes</Tag>
+                              <span className="text-xs text-gray-500">- {formatCurrency(row.discountAmount)}</span>
+                            </div>
+                          ) : (
+                            <Tag color="default">No</Tag>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-green-700 font-semibold">{formatCurrency(row.total)}</td>
+                        <td className="px-4 py-3 text-gray-700">{formatCurrency(row.cashCollected)}</td>
+                        <td className="px-4 py-3 text-gray-700">{formatCurrency(row.changeGiven)}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {posCheckoutTotal > POS_PAGE_SIZE && (
+              <div className="flex justify-end px-4 py-3 border-t border-gray-200 bg-gray-50">
+                <Pagination
+                  current={posCheckoutPage}
+                  pageSize={POS_PAGE_SIZE}
+                  total={posCheckoutTotal}
+                  onChange={(page) => setPosCheckoutPage(page)}
+                  showSizeChanger={false}
+                />
+              </div>
+            )}
           </div>
 
           {/* Performance Table */}

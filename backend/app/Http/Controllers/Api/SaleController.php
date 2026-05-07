@@ -37,6 +37,8 @@ class SaleController extends Controller
         $validated = $request->validate([
             'branch_id' => 'required|exists:branches,id',
             'user_id' => 'required|exists:users,id',
+            'customer_name' => 'nullable|string|max:255',
+            'senior_discount' => 'sometimes|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
             'items.*.quantity' => 'required|integer|min:1',
@@ -75,7 +77,10 @@ class SaleController extends Controller
             }
 
             $tax = 0; // No VAT
-            $total = $subtotal;
+            // Philippines Senior Citizen Discount: 20% (RA 9994)
+            $isSenior = (bool) ($validated['senior_discount'] ?? false);
+            $discountAmount = $isSenior ? round($subtotal * 0.20, 2) : 0;
+            $total = max($subtotal - $discountAmount, 0);
             $change = $validated['cash_collected'] - $total;
             $invoiceNumber = 'INV-' . date('Ymd') . '-' . str_pad(Sale::count() + 1, 4, '0', STR_PAD_LEFT);
 
@@ -83,9 +88,12 @@ class SaleController extends Controller
                 'invoice_number' => $invoiceNumber,
                 'branch_id' => $validated['branch_id'],
                 'user_id' => $validated['user_id'],
+                'customer_name' => $validated['customer_name'] ?? null,
+                'senior_discount' => $isSenior,
                 'sale_date' => now(),
                 'subtotal' => $subtotal,
                 'tax' => $tax,
+                'discount_amount' => $discountAmount,
                 'total' => $total,
                 'cash_collected' => $validated['cash_collected'],
                 'change_given' => $change,

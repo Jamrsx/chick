@@ -75,6 +75,9 @@ export default function POSScreen() {
   const [products, setProducts] = useState<StockItem[]>([]);
   const [cart, setCart] = useState<(StockItem & { quantity: number })[]>([]);
   const [cash, setCash] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [seniorDiscount, setSeniorDiscount] = useState(false);
+  const [qtyInputs, setQtyInputs] = useState<Record<string, string>>({});
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,6 +85,7 @@ export default function POSScreen() {
   const [ongoingStocks, setOngoingStocks] = useState<StockItem[]>([]);
   const [collapsedReceived, setCollapsedReceived] = useState(false);
   const [collapsedNotReceived, setCollapsedNotReceived] = useState(false);
+  const [orderModalVisible, setOrderModalVisible] = useState(false);
   
   const categories = ['All', 'Lechon Manok', 'Liempo'];
   
@@ -89,7 +93,10 @@ export default function POSScreen() {
     ? products 
     : products.filter(p => p.category === selectedCategory);
   
-  const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  // Philippines Senior Citizen Discount: 20% (RA 9994)
+  const discountAmount = seniorDiscount ? Math.round(subtotal * 0.2 * 100) / 100 : 0;
+  const total = Math.max(subtotal - discountAmount, 0);
   const change = cash ? Math.max(Number(cash) - total, 0) : 0;
   
   const scaleAnim = useRef(new Animated.Value(1)).current;
@@ -417,14 +424,19 @@ export default function POSScreen() {
       }
       
       if (existingItem) {
+        setQtyInputs((prev) => ({ ...prev, [product.id]: String(currentCartQuantity + 1) }));
         return prevCart.map(item =>
           item.id === product.id
             ? { ...item, quantity: item.quantity + 1 }
             : item
         );
       }
+      setQtyInputs((prev) => ({ ...prev, [product.id]: '1' }));
       return [...prevCart, { ...product, quantity: 1 }];
     });
+
+    // Open order modal whenever staff selects a product
+    setOrderModalVisible(true);
   };
 
   const updateQuantity = (id: string, delta: number) => {
@@ -436,6 +448,9 @@ export default function POSScreen() {
       if (!product) return prevCart;
       
       const newQuantity = item.quantity + delta;
+
+      // Keep editable input in sync with cart quantity
+      setQtyInputs((prev) => ({ ...prev, [id]: String(Math.max(newQuantity, 0)) }));
       
       // Check if exceeding stock
       if (newQuantity > product.quantity) {
@@ -452,6 +467,50 @@ export default function POSScreen() {
           ? { ...item, quantity: newQuantity }
           : item
       );
+    });
+  };
+
+  const setItemQuantity = (id: string, rawValue: string) => {
+    const sanitized = rawValue.replace(/[^\d]/g, '');
+
+    // Keep the raw input so staff can temporarily clear it while typing.
+    setQtyInputs((prev) => ({ ...prev, [id]: sanitized }));
+
+    // If empty, don't remove/change cart yet (prevents "disappearing" UX).
+    if (sanitized === '') return;
+
+    const nextQty = Number(sanitized);
+
+    setCart(prevCart => {
+      const item = prevCart.find(i => i.id === id);
+      if (!item) return prevCart;
+
+      const product = products.find(p => p.id === id);
+      const maxQty = Number(product?.quantity || item.quantity || 0);
+
+      if (nextQty <= 0) {
+        return prevCart.filter(i => i.id !== id);
+      }
+
+      if (nextQty > maxQty) {
+        Alert.alert('Insufficient Stock', `Only ${maxQty} ${item.name} available in stock.`);
+        setQtyInputs((prev) => ({ ...prev, [id]: String(maxQty) }));
+        return prevCart.map(i => (i.id === id ? { ...i, quantity: maxQty } : i));
+      }
+
+      return prevCart.map(i => (i.id === id ? { ...i, quantity: nextQty } : i));
+    });
+  };
+
+  const commitQtyInput = (id: string) => {
+    setQtyInputs((prev) => {
+      const raw = prev[id];
+      // If staff leaves it blank, revert to current quantity (do not remove item).
+      if (raw === '') {
+        const current = cart.find((c) => c.id === id);
+        return { ...prev, [id]: current ? String(current.quantity) : '1' };
+      }
+      return prev;
     });
   };
 
@@ -537,9 +596,12 @@ export default function POSScreen() {
     
     console.log('[POS CHECKOUT] Cart items:', cart);
     console.log('[POS CHECKOUT] Order items string:', orderItems);
+    console.log('[POS CHECKOUT] Subtotal:', subtotal);
+    console.log('[POS CHECKOUT] Senior discount:', seniorDiscount, 'Discount amount:', discountAmount);
     console.log('[POS CHECKOUT] Total:', total);
     console.log('[POS CHECKOUT] Cash:', cash);
     console.log('[POS CHECKOUT] Change:', change);
+    console.log('[POS CHECKOUT] Customer name:', customerName);
     
     try {
       const userRaw = await AsyncStorage.getItem('user');
@@ -633,6 +695,8 @@ export default function POSScreen() {
       await api.post('sales', {
         branch_id: branchId,
         user_id: user.id,
+        customer_name: customerName || null,
+        senior_discount: seniorDiscount,
         cash_collected: Number(cash),
         payment_method: 'cash',
         items: cart.map((item) => ({
@@ -652,6 +716,8 @@ export default function POSScreen() {
       );
       setCart([]);
       setCash('');
+      setCustomerName('');
+      setSeniorDiscount(false);
       await loadProducts();
     } catch (error: any) {
       Alert.alert('Checkout Failed', error?.response?.data?.message || 'Failed to save sale to backend.');
@@ -668,6 +734,8 @@ export default function POSScreen() {
         { text: 'Yes', style: 'destructive', onPress: () => {
           setCart([]);
           setCash('');
+          setCustomerName('');
+          setSeniorDiscount(false);
         }}
       ]
     );
@@ -695,10 +763,14 @@ export default function POSScreen() {
         >
           <Icon name="remove" size={18} color="#DC2626" />
         </TouchableOpacity>
-        <View className="bg-gray-100 px-3 py-2 rounded-lg min-w-[50px] items-center">
-          <Text className="font-bold text-base text-gray-800">
-            {item.quantity}
-          </Text>
+        <View className="bg-gray-100 px-2 py-2 rounded-lg min-w-[70px] items-center">
+          <TextInput
+            className="font-bold text-base text-gray-800 text-center w-14 py-0"
+            keyboardType="numeric"
+            value={qtyInputs[item.id] ?? String(item.quantity)}
+            onChangeText={(v) => setItemQuantity(item.id, v)}
+            onBlur={() => commitQtyInput(item.id)}
+          />
         </View>
         <TouchableOpacity
           onPress={() => updateQuantity(item.id, 1)}
@@ -866,77 +938,165 @@ export default function POSScreen() {
                   />
                 </View>
 
-                {/* ORDER SUMMARY */}
-                <View className="bg-white rounded-2xl p-5 mb-4 shadow-sm">
-                  <View className="flex-row justify-between items-center mb-5">
-                    <View className="flex-row items-center">
-                      <Icon name="receipt-long" size={24} color="#DC2626" />
-                      <Text className="font-bold text-xl ml-2 text-gray-800">
-                        Order Summary
-                      </Text>
-                    </View>
-                    <View className="bg-red-100 px-3 py-1 rounded-full">
-                      <Text className="text-red-600 text-xs font-semibold">
-                        {cart.length} {cart.length === 1 ? 'item' : 'items'}
-                      </Text>
-                    </View>
-                  </View>
+                {/* ORDER SUMMARY moved to modal */}
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Animated.View>
+      </ScrollView>
 
-                  {cart.length === 0 ? (
-                    <View className="py-12 items-center">
+      {/* Floating Cart Button */}
+      {cart.length > 0 && (
+        <View style={{ position: 'absolute', left: 16, right: 16, bottom: Math.max(insets.bottom + 16, 16) }}>
+          <TouchableOpacity
+            onPress={() => setOrderModalVisible(true)}
+            className="bg-red-600 py-4 rounded-2xl shadow-lg"
+            activeOpacity={0.85}
+          >
+            <View className="flex-row items-center justify-between px-5">
+              <View className="flex-row items-center">
+                <View className="bg-white/20 p-2 rounded-xl mr-3">
+                  <Icon name="shopping-cart" size={18} color="white" />
+                </View>
+                <View>
+                  <Text className="text-white font-bold text-base">View Order</Text>
+                  <Text className="text-white/80 text-xs">{cart.length} item(s)</Text>
+                </View>
+              </View>
+              <View className="flex-row items-center">
+                <Text className="text-white font-bold text-lg mr-2">₱{total}</Text>
+                <Icon name="chevron-right" size={24} color="white" />
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Order Summary Modal */}
+      <Modal
+        visible={orderModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setOrderModalVisible(false)}
+      >
+        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+          <View className="flex-1 bg-black/50 justify-end">
+            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+              <View className="bg-white rounded-t-3xl h-[96%]">
+                <View className="bg-red-600 px-4 py-3 rounded-t-3xl flex-row justify-between items-center">
+                  <View className="flex-row items-center">
+                    <Icon name="receipt-long" size={22} color="white" />
+                    <Text className="text-white font-bold text-lg ml-2">Order Summary</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setOrderModalVisible(false)}>
+                    <Icon name="close" size={26} color="white" />
+                  </TouchableOpacity>
+                </View>
+
+                <View className="flex-1">
+                  {/* Compact top bar */}
+                  {cart.length > 0 && (
+                    <View className="px-4 pt-3 pb-2 flex-row justify-between items-center">
+                      <View className="bg-red-100 px-3 py-1 rounded-full">
+                        <Text className="text-red-600 text-xs font-semibold">
+                          {cart.length} {cart.length === 1 ? 'item' : 'items'}
+                        </Text>
+                      </View>
+                      <TouchableOpacity onPress={handleCancelOrder} className="bg-red-50 border border-red-200 px-3 py-2 rounded-xl">
+                        <View className="flex-row items-center">
+                          <Icon name="delete-sweep" size={16} color="#DC2626" />
+                          <Text className="text-red-600 font-bold text-xs ml-1">Clear</Text>
+                        </View>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  <ScrollView className="flex-1 px-4" keyboardShouldPersistTaps="handled">
+                    {cart.length === 0 ? (
+                      <View className="py-14 items-center">
                       <View className="bg-gray-100 p-4 rounded-full mb-4">
                         <Icon name="shopping-cart" size={40} color="#9CA3AF" />
                       </View>
                       <Text className="text-gray-400 text-center font-medium">Your cart is empty</Text>
                       <Text className="text-gray-400 text-xs text-center mt-1">Tap on items to add</Text>
-                    </View>
-                  ) : (
-                    <>
-                      {/* Cart Items */}
-                      <View className="bg-gray-50 rounded-xl p-3 mb-4">
-                        {cart.map((item) => (
-                          <View key={item.id}>
-                            {renderCartItem({ item })}
-                          </View>
-                        ))}
                       </View>
+                    ) : (
+                      <>
+                        {/* Customer + Discount (compact) */}
+                        <View className="bg-white rounded-2xl border border-gray-200 p-3 mb-3">
+                          <View className="flex-row items-center bg-gray-50 border border-gray-200 rounded-2xl">
+                            <View className="p-3">
+                              <Icon name="person" size={18} color="#6B7280" />
+                            </View>
+                            <TextInput
+                              className="flex-1 p-3 text-base"
+                              placeholder="Customer name"
+                              value={customerName}
+                              onChangeText={setCustomerName}
+                            />
+                          </View>
 
-                      {/* TOTAL */}
-                      <View className="bg-green-500 p-4 rounded-xl">
+                          <TouchableOpacity
+                            onPress={() => setSeniorDiscount((p) => !p)}
+                            className="mt-2 bg-gray-50 border border-gray-200 rounded-2xl p-3"
+                            activeOpacity={0.85}
+                          >
+                            <View className="flex-row items-center justify-between">
+                              <View className="flex-row items-center">
+                                <View className={`w-6 h-6 rounded-md items-center justify-center ${seniorDiscount ? 'bg-green-600' : 'bg-white'} border border-gray-300`}>
+                                  {seniorDiscount && <Icon name="check" size={18} color="white" />}
+                                </View>
+                                <View className="ml-3">
+                                  <Text className="text-gray-900 font-bold">Senior Discount</Text>
+                                  <Text className="text-gray-500 text-xs">20% off</Text>
+                                </View>
+                              </View>
+                              <Text className="text-gray-700 font-bold">{seniorDiscount ? `- ₱${discountAmount}` : 'Off'}</Text>
+                            </View>
+                          </TouchableOpacity>
+                        </View>
+
+                        {/* Cart Items (only this scrolls) */}
+                        <View className="bg-gray-50 rounded-2xl p-3 mb-3 border border-gray-100">
+                          {cart.map((item) => (
+                            <View key={item.id}>
+                              {renderCartItem({ item })}
+                            </View>
+                          ))}
+                        </View>
+
+                        <View style={{ height: 12 }} />
+                      </>
+                    )}
+                  </ScrollView>
+
+                  {/* Sticky bottom panel (no scrolling) */}
+                  {cart.length > 0 && (
+                    <View className="px-4 pt-3 border-t border-gray-100" style={{ paddingBottom: Math.max(14, insets.bottom + 14) }}>
+                      {/* Total row */}
+                      <View className="bg-green-500 p-3 rounded-2xl mb-3">
                         <View className="flex-row justify-between items-center">
                           <View>
-                            <Text className="text-white/90 text-xs font-semibold uppercase tracking-wider mb-1">Total Amount</Text>
+                            <Text className="text-white/90 text-[11px] font-semibold uppercase tracking-wider mb-0.5">Total</Text>
                             <Text className="text-white font-bold text-2xl">₱{total}</Text>
+                            {seniorDiscount && (
+                              <Text className="text-white/90 text-[11px] mt-0.5">-₱{discountAmount} (from ₱{subtotal})</Text>
+                            )}
                           </View>
-                          <View className="bg-green-600 p-3 rounded-xl">
-                            <Icon name="payments" size={24} color="white" />
+                          <View className="bg-green-600 p-3 rounded-2xl">
+                            <Icon name="payments" size={22} color="white" />
                           </View>
                         </View>
                       </View>
-                    </>
-                  )}
 
-                  {/* CASH INPUT with Quick Add */}
-                  {cart.length > 0 && (
-                    <View className="mt-5">
-                      <View className="flex-row items-center mb-3">
-                        <Icon name="payments" size={20} color="#DC2626" />
-                        <Text className="font-semibold ml-2 text-gray-700">Cash Amount</Text>
-                      </View>
-                      
-                      {/* Quick Add Buttons - Horizontal ScrollView */}
-                      <ScrollView 
-                        horizontal 
-                        showsHorizontalScrollIndicator={false}
-                        className="mb-4"
-                        nestedScrollEnabled={true}
-                      >
+                      {/* Quick cash + input */}
+                      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2" nestedScrollEnabled={true}>
                         <View className="flex-row">
                           {quickAddAmounts.map((amount) => (
                             <TouchableOpacity
                               key={amount}
                               onPress={() => setCash(amount.toString())}
-                              className="bg-red-50 border border-red-200 px-4 py-3 rounded-xl mr-3 shadow-sm"
+                              className="bg-red-50 border border-red-200 px-4 py-2.5 rounded-xl mr-2"
                             >
                               <Text className="text-red-600 font-bold">₱{amount}</Text>
                             </TouchableOpacity>
@@ -945,13 +1105,13 @@ export default function POSScreen() {
                       </ScrollView>
 
                       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-                        <View className="flex-row items-center bg-white border-2 border-gray-300 rounded-xl shadow-sm">
-                          <View className="bg-red-600 p-3 rounded-l-xl">
+                        <View className="flex-row items-center bg-white border-2 border-gray-300 rounded-2xl">
+                          <View className="bg-red-600 p-3 rounded-l-2xl">
                             <Icon name="attach-money" size={20} color="white" />
                           </View>
                           <TextInput
                             className="flex-1 p-4 text-base"
-                            placeholder="Enter cash amount"
+                            placeholder="Cash amount"
                             keyboardType="numeric"
                             value={cash.toString()}
                             onChangeText={(value) => setCash(value)}
@@ -961,40 +1121,34 @@ export default function POSScreen() {
                         </View>
                       </Animated.View>
 
-                      {/* CHANGE DISPLAY */}
                       {cash && Number(cash) >= total && (
-                        <View className="bg-green-500 p-4 rounded-xl mt-4">
+                        <View className="bg-green-500 p-3 rounded-2xl mt-3">
                           <View className="flex-row justify-between items-center">
                             <View className="flex-row items-center">
-                              <Icon name="check-circle" size={20} color="white" />
+                              <Icon name="check-circle" size={18} color="white" />
                               <Text className="text-white font-bold ml-2">Change</Text>
                             </View>
-                            <Text className="text-white font-bold text-2xl">₱{change}</Text>
+                            <Text className="text-white font-bold text-xl">₱{change}</Text>
                           </View>
                         </View>
                       )}
-                      
+
                       {cash && Number(cash) < total && Number(cash) > 0 && (
-                        <View className="bg-red-50 border border-red-200 p-4 rounded-xl mt-4">
+                        <View className="bg-red-50 border border-red-200 p-3 rounded-2xl mt-3">
                           <View className="flex-row items-center justify-center">
-                            <Icon name="error-outline" size={20} color="#DC2626" />
+                            <Icon name="error-outline" size={18} color="#DC2626" />
                             <Text className="text-red-600 text-center ml-2 font-medium">
-                              Insufficient: Need ₱{total - Number(cash)} more
+                              Need ₱{total - Number(cash)} more
                             </Text>
                           </View>
                         </View>
                       )}
-                    </View>
-                  )}
 
-                  {/* BUTTONS */}
-                  {cart.length > 0 && (
-                    <>
                       <Animated.View style={{ transform: [{ scale: buttonScaleAnim }] }}>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           onPress={handleCheckout}
-                          className="bg-green-500 py-4 mt-5 rounded-xl items-center shadow-lg"
-                          activeOpacity={0.8}
+                          className="bg-green-500 py-4 mt-3 rounded-2xl items-center shadow-lg"
+                          activeOpacity={0.85}
                         >
                           <View className="flex-row items-center">
                             <Icon name="check-circle" size={20} color="white" />
@@ -1002,25 +1156,14 @@ export default function POSScreen() {
                           </View>
                         </TouchableOpacity>
                       </Animated.View>
-
-                      <TouchableOpacity 
-                        onPress={handleCancelOrder}
-                        className="bg-red-500 py-4 mt-3 rounded-xl items-center shadow-lg"
-                        activeOpacity={0.8}
-                      >
-                        <View className="flex-row items-center">
-                          <Icon name="cancel" size={20} color="white" />
-                          <Text className="text-white font-bold text-base ml-2">Cancel Order</Text>
-                        </View>
-                      </TouchableOpacity>
-                    </>
+                    </View>
                   )}
                 </View>
               </View>
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </Animated.View>
-      </ScrollView>
+            </KeyboardAvoidingView>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
       
       {/* Ongoing Stocks Modal */}
       <Modal
