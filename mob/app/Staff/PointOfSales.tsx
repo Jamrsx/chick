@@ -83,6 +83,7 @@ export default function POSScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [ongoingStocksModalVisible, setOngoingStocksModalVisible] = useState(false);
   const [ongoingStocks, setOngoingStocks] = useState<StockItem[]>([]);
+  const [hasPendingOngoingStock, setHasPendingOngoingStock] = useState(false);
   const [collapsedReceived, setCollapsedReceived] = useState(false);
   const [collapsedNotReceived, setCollapsedNotReceived] = useState(false);
   const [orderModalVisible, setOrderModalVisible] = useState(false);
@@ -230,6 +231,13 @@ export default function POSScreen() {
           ongoing_stocks: item.ongoing_stocks || [],
         };
       });
+
+      // Red dot indicator: if ANY pending delivery exists for this branch.
+      const pendingExists = (data || []).some((item: any) =>
+        (item.ongoing_stocks || []).some((d: any) => idsEqual(d.branch_id, branchId) && !d.received_at && Number(d.quantity || 0) > 0)
+      );
+      console.log('[POS] pending ongoing stock exists:', pendingExists);
+      setHasPendingOngoingStock(Boolean(pendingExists));
       
       // POS should only list products that are RECEIVED and have enough supply.
       const availableProducts = productsWithDetails.filter((p: StockItem) => {
@@ -241,6 +249,7 @@ export default function POSScreen() {
     } catch (error) {
       console.error('Error loading products:', error);
       setProducts([]);
+      setHasPendingOngoingStock(false);
     } finally {
       setLoading(false);
     }
@@ -353,9 +362,17 @@ export default function POSScreen() {
         </View>
       </View>
       <View className="flex-row justify-between items-center mt-2">
-        <View>
-          <Text className="text-gray-500 text-xs">Quantity</Text>
-          <Text className="text-gray-900 font-bold text-lg">{item.quantity}</Text>
+        <View className="flex-row gap-8">
+          <View>
+            <Text className="text-gray-500 text-xs">In Stock</Text>
+            <Text className="text-gray-900 font-bold text-lg">{Number(item.quantity || 0)}</Text>
+          </View>
+          <View>
+            <Text className="text-gray-500 text-xs">Incoming</Text>
+            <Text className={`font-extrabold text-lg ${Number(item.pendingQty || 0) > 0 ? 'text-orange-700' : 'text-gray-400'}`}>
+              {Number(item.pendingQty || 0)}
+            </Text>
+          </View>
         </View>
         {Number(item.pendingQty || 0) > 0 && (
           <TouchableOpacity
@@ -845,9 +862,24 @@ export default function POSScreen() {
                   onPress={loadOngoingStocks}
                   className="bg-blue-600 py-3 px-4 rounded-xl mb-4 shadow-md"
                 >
-                  <View className="flex-row items-center justify-center">
+                  <View className="flex-row items-center justify-center relative">
                     <Icon name="inventory" size={20} color="white" />
                     <Text className="text-white font-bold text-base ml-2">Ongoing Stocks</Text>
+                    {hasPendingOngoingStock && (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          top: -4,
+                          right: -4,
+                          width: 10,
+                          height: 10,
+                          borderRadius: 999,
+                          backgroundColor: '#EF4444',
+                          borderWidth: 2,
+                          borderColor: 'rgba(255,255,255,0.9)',
+                        }}
+                      />
+                    )}
                   </View>
                 </TouchableOpacity>
 
