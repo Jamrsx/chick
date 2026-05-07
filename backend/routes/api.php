@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\AttendanceController;
 use App\Http\Controllers\Api\SaleController;
 use App\Http\Controllers\Api\StaffAssignmentController;
 use App\Http\Controllers\Api\DeductionIncentiveController;
+use App\Http\Controllers\Api\FaceEnrollmentController;
 
 // PUBLIC ROUTES
 Route::post('/login', [AuthController::class, 'login']);
@@ -46,6 +47,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/staff/{userId}/incentives', [DeductionIncentiveController::class, 'storeIncentives']);
     Route::get('/deductions-incentives/all', [DeductionIncentiveController::class, 'getAllForMonth']);
     
+    // Face enrollment (attendance)
+    Route::get('/face/status', [FaceEnrollmentController::class, 'status']);
+    Route::post('/face/enroll', [FaceEnrollmentController::class, 'enroll']);
+    Route::post('/face/verify', [FaceEnrollmentController::class, 'verify']);
+    Route::post('/face/reset', [FaceEnrollmentController::class, 'reset']);
+
     // Attendance
     Route::get('/attendance', [AttendanceController::class, 'index']);
     Route::post('/attendance/time-in', [AttendanceController::class, 'timeIn']);

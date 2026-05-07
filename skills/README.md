@@ -11,6 +11,7 @@ Short references for developers (and AI assistants) working on **chick**. Read t
 | React (this frontend) | [react.md](react.md) |
 | Efficient DB fetching / avoiding N+1 | [efficient-data-fetching.md](efficient-data-fetching.md) |
 | Expo / React Native (`mob/`) | [expo.md](expo.md) |
+| Mobile attendance face recognition (Expo + Laravel) | [mobile-face-recognition-attendance.md](mobile-face-recognition-attendance.md) |
 | Navigation & routing (web vs mobile) | [navigation-and-routing.md](navigation-and-routing.md) |
 
 ## Using these files in Cursor

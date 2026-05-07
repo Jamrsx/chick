@@ -50,4 +50,14 @@ class User extends Authenticatable
         $activeAssignment = $this->branchAssignments->where('is_active', true)->first();
         return $activeAssignment ? $activeAssignment->branch : null;
     }
+
+    public function faceTemplates()
+    {
+        return $this->hasMany(UserFaceTemplate::class);
+    }
+
+    public function activeFaceTemplate()
+    {
+        return $this->hasOne(UserFaceTemplate::class)->where('is_active', true);
+    }
 }

@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Attendance;
+use App\Models\UserFaceTemplate;
 use App\Models\StaffAssignment;
+use App\Services\FaceTemplateMatcher;
 use App\Models\StaffDeduction;
 use App\Models\StaffIncentive;
 use Illuminate\Http\Request;
@@ -67,7 +69,65 @@ class AttendanceController extends Controller
             'branch_id' => 'required|exists:branches,id',
             'date' => 'nullable|date',
             'time_in' => 'required|string',
+            'face_embedding' => 'nullable|array|min:64|max:256',
+            'face_embedding.*' => 'numeric',
         ]);
+
+        $authUser = $request->user();
+        if ((int) $validated['user_id'] !== (int) $authUser->id) {
+            return response()->json(['message' => 'Unauthorized attendance action.', 'error' => 'user_id mismatch'], 403);
+        }
+
+        // Staff attendance: enrolled face template required + embedding must match
+        $authRole = strtolower((string) ($authUser->role ?? ''));
+        if ($authRole === 'staff') {
+            $template = UserFaceTemplate::where('user_id', $authUser->id)
+                ->where('is_active', true)
+                ->first();
+            if (! $template) {
+                return response()->json([
+                    'message' => 'Register your face first before time in/out.',
+                    'code' => 'FACE_NOT_ENROLLED',
+                ], 422);
+            }
+            if ((int) ($template->embedding_dim ?? 0) < 64) {
+                return response()->json([
+                    'message' => 'Old face template detected. Please register again for high-accuracy face recognition.',
+                    'code' => 'FACE_TEMPLATE_WEAK',
+                ], 422);
+            }
+            if (! is_array($request->input('face_embedding')) || count($request->input('face_embedding')) < 8) {
+                return response()->json([
+                    'message' => 'Face verification required.',
+                    'code' => 'FACE_EMBEDDING_REQUIRED',
+                ], 422);
+            }
+            $probe = array_map('floatval', $request->input('face_embedding'));
+            if (count($probe) < 64) {
+                return response()->json([
+                    'message' => 'High-accuracy face descriptor required. Please keep the app open and try again.',
+                    'code' => 'FACE_STRONG_EMBEDDING_REQUIRED',
+                ], 422);
+            }
+            if (count($probe) !== count($template->embedding)) {
+                return response()->json([
+                    'message' => 'Face template outdated. Please re-register your face.',
+                    'code' => 'FACE_DIM_MISMATCH',
+                ], 422);
+            }
+            $threshold = FaceTemplateMatcher::threshold();
+            $similarity = FaceTemplateMatcher::cosineSimilarity($template->embedding, $probe);
+            if ($similarity < $threshold) {
+                \Log::warning('[ATTENDANCE] Face mismatch on time-in', ['user_id' => $authUser->id]);
+
+                return response()->json([
+                    'message' => 'Face not recognized. Time in denied.',
+                    'code' => 'FACE_MISMATCH',
+                    'similarity' => $similarity,
+                    'threshold' => $threshold,
+                ], 422);
+            }
+        }
 
         $assignment = StaffAssignment::where('user_id', $validated['user_id'])
             ->where('branch_id', $validated['branch_id'])
@@ -115,6 +175,15 @@ class AttendanceController extends Controller
             ]
         );
 
+        // Optional debug for mobile UI (non-breaking if ignored)
+        if (isset($similarity, $threshold)) {
+            return response()->json([
+                'attendance' => $attendance,
+                'similarity' => $similarity,
+                'threshold' => $threshold,
+            ]);
+        }
+
         return response()->json($attendance);
     }
 
@@ -123,9 +192,66 @@ class AttendanceController extends Controller
         try {
             $validated = $request->validate([
                 'time_out' => 'required|string',
+                'face_embedding' => 'nullable|array|min:64|max:256',
+                'face_embedding.*' => 'numeric',
             ]);
 
             $attendance = Attendance::findOrFail($id);
+
+            $authUser = $request->user();
+            if ((int) $attendance->user_id !== (int) $authUser->id) {
+                return response()->json(['message' => 'Unauthorized attendance action.', 'error' => 'not your record'], 403);
+            }
+
+            $authRole = strtolower((string) ($authUser->role ?? ''));
+            if ($authRole === 'staff') {
+                $template = UserFaceTemplate::where('user_id', $authUser->id)
+                    ->where('is_active', true)
+                    ->first();
+                if (! $template) {
+                    return response()->json([
+                        'message' => 'Register your face first before time in/out.',
+                        'code' => 'FACE_NOT_ENROLLED',
+                    ], 422);
+                }
+                if ((int) ($template->embedding_dim ?? 0) < 64) {
+                    return response()->json([
+                        'message' => 'Old face template detected. Please register again for high-accuracy face recognition.',
+                        'code' => 'FACE_TEMPLATE_WEAK',
+                    ], 422);
+                }
+                if (! is_array($request->input('face_embedding')) || count($request->input('face_embedding')) < 8) {
+                    return response()->json([
+                        'message' => 'Face verification required.',
+                        'code' => 'FACE_EMBEDDING_REQUIRED',
+                    ], 422);
+                }
+                $probe = array_map('floatval', $request->input('face_embedding'));
+                if (count($probe) < 64) {
+                    return response()->json([
+                        'message' => 'High-accuracy face descriptor required. Please keep the app open and try again.',
+                        'code' => 'FACE_STRONG_EMBEDDING_REQUIRED',
+                    ], 422);
+                }
+                if (count($probe) !== count($template->embedding)) {
+                    return response()->json([
+                        'message' => 'Face template outdated. Please re-register your face.',
+                        'code' => 'FACE_DIM_MISMATCH',
+                    ], 422);
+                }
+                $threshold = FaceTemplateMatcher::threshold();
+                $similarity = FaceTemplateMatcher::cosineSimilarity($template->embedding, $probe);
+                if ($similarity < $threshold) {
+                    \Log::warning('[ATTENDANCE] Face mismatch on time-out', ['user_id' => $authUser->id]);
+
+                    return response()->json([
+                        'message' => 'Face not recognized. Time out denied.',
+                        'code' => 'FACE_MISMATCH',
+                        'similarity' => $similarity,
+                        'threshold' => $threshold,
+                    ], 422);
+                }
+            }
 
             if (!$attendance->time_in) {
                 return response()->json([
@@ -158,6 +284,14 @@ class AttendanceController extends Controller
                 'hours_worked' => $hoursWorked,
                 'status' => $status,
             ]);
+
+            if (isset($similarity, $threshold)) {
+                return response()->json([
+                    'attendance' => $attendance,
+                    'similarity' => $similarity,
+                    'threshold' => $threshold,
+                ]);
+            }
 
             return response()->json($attendance);
         } catch (\Exception $e) {
