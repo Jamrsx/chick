@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect } from "react";
-import { Tag, Button, Modal, Form, Input, InputNumber, Select, Space, message, Progress } from "antd";
+import { Tag, Button, Modal, Form, Input, InputNumber, Select, Space, message, Progress, Switch, Tooltip } from "antd";
 import { 
   PlusOutlined, 
   ShoppingOutlined, 
@@ -47,7 +47,7 @@ function ProductList() {
 
       // Otherwise, fetch from backend
       const [productsRes, branchesRes] = await Promise.all([
-        cachedProducts ? Promise.resolve({ data: cachedProducts }) : api.get("/products"),
+        cachedProducts ? Promise.resolve({ data: cachedProducts }) : api.get("/products", { params: { include_inactive: true } }),
         cachedBranches ? Promise.resolve({ data: cachedBranches }) : api.get("/branches"),
       ]);
 
@@ -152,8 +152,40 @@ function ProductList() {
             
             message.success(`${product.name} has been deleted`);
           })
-          .catch(() => message.error("Failed to delete product"));
+          .catch((error) => {
+            console.error("[PRODUCT] delete failed", error?.response?.data ?? error?.message ?? error);
+            message.error(error?.response?.data?.message || "Failed to delete product");
+          });
       }
+    });
+  };
+
+  const isProductActive = (value) => value === true || value === 1 || value === "1";
+
+  const toggleProductActive = (product) => {
+    const id = product?.id;
+    if (!id) return;
+    const nextActive = !isProductActive(product?.is_active);
+    Modal.confirm({
+      title: nextActive ? "Enable Product" : "Disable Product",
+      content: nextActive
+        ? `Enable "${product.name}" so it appears in active product lists again?`
+        : `Disable "${product.name}"? This will hide it from active lists but keep sales records.`,
+      okText: nextActive ? "Enable" : "Disable",
+      okButtonProps: { danger: !nextActive },
+      cancelText: "Cancel",
+      onOk: async () => {
+        try {
+          console.log("[PRODUCT] toggle is_active", { id, nextActive });
+          await api.put(`/products/${id}`, { is_active: nextActive });
+          invalidateCache("products");
+          await loadData(true);
+          message.success(nextActive ? "Product enabled." : "Product disabled.");
+        } catch (error) {
+          console.error("[PRODUCT] toggle is_active failed", error?.response?.data ?? error?.message ?? error);
+          message.error(error?.response?.data?.message || "Failed to update product status");
+        }
+      },
     });
   };
 
@@ -533,6 +565,12 @@ function ProductList() {
                                         >
                                           Restock
                                         </Button>
+                                        <Tooltip title={isProductActive(stock.product?.is_active) ? "Disable product" : "Enable product"}>
+                                          <Switch
+                                            checked={isProductActive(stock.product?.is_active)}
+                                            onChange={() => toggleProductActive(stock.product)}
+                                          />
+                                        </Tooltip>
                                         <Button 
                                           size="small"
                                           danger

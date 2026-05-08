@@ -9,14 +9,18 @@ use App\Models\ProductStockDelivery;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Database\QueryException;
 
 class ProductController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
-        $products = Product::with(['stocks.branch', 'deliveries.branch'])
-            ->where('is_active', true)
-            ->get();
+        $query = Product::with(['stocks.branch', 'deliveries.branch']);
+        $includeInactive = $request->boolean('include_inactive', false);
+        if (!$includeInactive) {
+            $query->where('is_active', true);
+        }
+        $products = $query->get();
 
         // Frontend/mobile expect `product_stocks`
         $products = $products->map(function ($p) {
@@ -123,8 +127,19 @@ class ProductController extends Controller
     public function destroy($id)
     {
         $product = Product::findOrFail($id);
-        $product->delete();
-        return response()->json(['message' => 'Product deleted successfully']);
+        try {
+            $product->delete();
+            return response()->json(['message' => 'Product deleted successfully']);
+        } catch (QueryException $e) {
+            if ((string) $e->getCode() === '23000') {
+                return response()->json([
+                    'message' => 'Cannot delete this product because it is used in sales records. Disable the product instead.',
+                    'code' => 'PRODUCT_DELETE_CONSTRAINT',
+                    'suggested_action' => 'disable',
+                ], 409);
+            }
+            throw $e;
+        }
     }
 
     public function restock(Request $request, $id)
