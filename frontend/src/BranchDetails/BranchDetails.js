@@ -31,19 +31,42 @@ const formatStatus = (status, timeIn, timeOut) => {
 
 const isPresentForDay = (staff) => Boolean(staff.time_in_raw);
 
-const formatTime = (value) => {
-  if (!value) return "-";
+const extractTimeParts = (timeValue) => {
+  if (!timeValue) return null;
 
-  // Parse the time string directly (format is HH:MM:SS from backend)
-  const [hours, minutes] = value.split(':');
-  const hour = parseInt(hours, 10);
-  const minute = parseInt(minutes, 10);
-  
-  const period = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12; // Convert 0 to 12
-  const displayMinute = minute.toString().padStart(2, '0');
-  
-  return `${displayHour}:${displayMinute} ${period}`;
+  try {
+    // Full ISO string like "2026-04-25T01:43:00.000000Z"
+    // Use UTC getters to avoid browser timezone shifting display.
+    if (typeof timeValue === "string" && timeValue.includes("T")) {
+      const d = new Date(timeValue);
+      return { hours: d.getUTCHours(), minutes: d.getUTCMinutes() };
+    }
+
+    // Plain time string like "19:41:05" or "19:41"
+    if (typeof timeValue === "string" && /^\d{2}:\d{2}/.test(timeValue)) {
+      const [hh, mm] = timeValue.split(":");
+      return { hours: parseInt(hh, 10), minutes: parseInt(mm, 10) };
+    }
+
+    return null;
+  } catch (error) {
+    console.error("[BranchDetails] Error extracting time:", error);
+    return null;
+  }
+};
+
+const formatTime = (timeValue) => {
+  if (!timeValue) return "-";
+
+  const extracted = extractTimeParts(timeValue);
+  if (!extracted) return "-";
+
+  let { hours, minutes } = extracted;
+  const ampm = hours >= 12 ? "PM" : "AM";
+  hours = hours % 12;
+  hours = hours ? hours : 12;
+  const minutesStr = minutes.toString().padStart(2, "0");
+  return `${hours}:${minutesStr} ${ampm}`;
 };
 
 function BranchDetails() {
@@ -115,6 +138,15 @@ function BranchDetails() {
             };
           })
         );
+        console.log("[BranchDetails] attendance loaded", {
+          date: selectedDate,
+          rows: (attendanceRes.data || []).length,
+          sample: (attendanceRes.data || []).slice(0, 3).map((r) => ({
+            id: r?.id,
+            time_in: r?.time_in,
+            time_out: r?.time_out,
+          })),
+        });
       } catch (err) {
         setError("Failed to load branch details");
         setBranch(null);
