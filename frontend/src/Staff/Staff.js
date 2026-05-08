@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Tag, Modal, message, Avatar, Button } from "antd";
+import { Tag, Modal, message, Avatar, Button, Switch, Tooltip } from "antd";
 import { 
   UserOutlined,
   PlusOutlined,
@@ -23,6 +23,8 @@ function Staff() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingStaff, setEditingStaff] = useState(null);
+  const [toggleActiveLoadingId, setToggleActiveLoadingId] = useState(null);
+  const isStaffActive = (value) => value === true || value === 1 || value === "1";
 
   const [form, setForm] = useState({
     username: '',
@@ -212,10 +214,11 @@ function Staff() {
   };
 
   const deleteStaff = async () => {
-    if (!selectedStaff) return;
+    if (!selectedStaff?.id) return;
     
     try {
-      await api.delete(`/staff/${selectedStaff}`);
+      console.log("[STAFF] delete request", selectedStaff);
+      await api.delete(`/staff/${selectedStaff.id}`);
       setShowDeleteModal(false);
       setSelectedStaff(null);
       
@@ -225,12 +228,64 @@ function Staff() {
       await loadData();
       message.success("Staff member deleted successfully");
     } catch (error) {
-      message.error("Failed to delete staff member");
+      console.error("[STAFF] delete failed", error?.response?.data ?? error?.message ?? error);
+      const code = error?.response?.data?.code;
+      if (code === "STAFF_DELETE_CONSTRAINT") {
+        message.error(error?.response?.data?.message || "Cannot delete staff with linked sales.");
+      } else {
+        message.error(error?.response?.data?.message || "Failed to delete staff member");
+      }
     }
   };
 
-  const openDeleteModal = (id) => {
-    setSelectedStaff(id);
+  const toggleStaffActive = async (staffMember) => {
+    const id = staffMember?.id ?? staffMember?.user_id ?? staffMember?.staff_id ?? null;
+    if (!id) {
+      message.error("Cannot update staff: missing ID.");
+      return;
+    }
+
+    const nextActive = !isStaffActive(staffMember?.is_active);
+    Modal.confirm({
+      title: nextActive ? "Enable staff account" : "Disable staff account",
+      content: (
+        <div>
+          <p className="text-gray-700 mb-2">
+            {nextActive
+              ? "This staff will be able to login again."
+              : "This staff will no longer be able to login, but sales history will remain."}
+          </p>
+          <p className="text-sm text-gray-500">
+            Staff: <span className="font-semibold">{staffMember?.firstname} {staffMember?.lastname}</span>
+          </p>
+        </div>
+      ),
+      okText: nextActive ? "Enable" : "Disable",
+      okButtonProps: { danger: !nextActive },
+      cancelText: "Cancel",
+      onOk: async () => {
+        setToggleActiveLoadingId(id);
+        try {
+          console.log("[STAFF] toggle is_active", { id, nextActive });
+          await api.put(`/staff/${id}`, { is_active: nextActive });
+          invalidateCache("staff");
+          await loadData(true);
+          message.success(nextActive ? "Staff enabled." : "Staff disabled.");
+        } catch (error) {
+          console.error("[STAFF] toggle is_active failed", error?.response?.data ?? error?.message ?? error);
+          message.error(error?.response?.data?.message || "Failed to update staff status.");
+        } finally {
+          setToggleActiveLoadingId(null);
+        }
+      },
+    });
+  };
+
+  const openDeleteModal = (staffMember) => {
+    const id = staffMember?.id ?? staffMember?.user_id ?? staffMember?.staff_id ?? null;
+    const name = `${staffMember?.firstname ?? ""} ${staffMember?.lastname ?? ""}`.trim();
+    console.log("[STAFF] open delete modal", { id, raw: staffMember });
+    setSelectedStaff({ id, name: name || staffMember?.username || "Staff" });
     setShowDeleteModal(true);
   };
 
@@ -365,13 +420,16 @@ function Staff() {
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">STAFF</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">USERNAME</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">BRANCH</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">STATUS</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">ADDRESS</th>
                       <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">ACTION</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {staff.map((s, idx) => (
-                      <tr key={s.id} className="hover:bg-gray-50 transition-colors">
+                    {staff.map((s, idx) => {
+                      const rowId = s?.id ?? s?.user_id ?? s?.staff_id ?? `${s?.username ?? 'staff'}-${idx}`;
+                      return (
+                      <tr key={rowId} className="hover:bg-gray-50 transition-colors">
                         <td className="px-4 py-3 text-gray-500">{idx + 1}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
@@ -406,6 +464,13 @@ function Staff() {
                           )}
                         </td>
                         <td className="px-4 py-3">
+                          {isStaffActive(s?.is_active) ? (
+                            <Tag color="green">Active</Tag>
+                          ) : (
+                            <Tag color="red">Disabled</Tag>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
                           {s.address ? (
                             <div className="flex items-center gap-2">
                               <EnvironmentOutlined className="text-gray-400 text-xs" />
@@ -417,6 +482,13 @@ function Staff() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
+                            <Tooltip title={isStaffActive(s?.is_active) ? "Disable staff" : "Enable staff"}>
+                              <Switch
+                                checked={isStaffActive(s?.is_active)}
+                                onChange={() => toggleStaffActive(s)}
+                                loading={toggleActiveLoadingId === (s?.id ?? s?.user_id ?? s?.staff_id ?? null)}
+                              />
+                            </Tooltip>
                             <button
                               onClick={() => openEditModal(s)}
                               className="text-blue-500 hover:text-blue-700 transition-colors"
@@ -425,7 +497,7 @@ function Staff() {
                               <EditOutlined />
                             </button>
                             <button
-                              onClick={() => openDeleteModal(s.id)}
+                              onClick={() => openDeleteModal(s)}
                               className="text-red-500 hover:text-red-700 transition-colors"
                               title="Delete Staff"
                             >
@@ -434,7 +506,8 @@ function Staff() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -776,8 +849,16 @@ function Staff() {
         width={400}
       >
         <div className="py-4">
-          <p className="text-gray-700 mb-2">Are you sure you want to delete this staff member?</p>
+          <p className="text-gray-700 mb-2">
+            Are you sure you want to delete{" "}
+            <span className="font-semibold">{selectedStaff?.name || "this staff member"}</span>?
+          </p>
           <p className="text-sm text-gray-500">This action cannot be undone.</p>
+          {!selectedStaff?.id ? (
+            <p className="text-sm text-red-600 mt-3">
+              Cannot delete: missing staff ID from API response. Please refresh, or ask admin to check legacy staff data.
+            </p>
+          ) : null}
         </div>
       </Modal>
     </div>

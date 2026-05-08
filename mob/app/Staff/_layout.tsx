@@ -1,9 +1,10 @@
-import { Tabs } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import { Tabs, useRouter } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View } from 'react-native';
+import { ActivityIndicator, Alert, View } from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import { api } from '../../config/api';
+import { useAuth } from '../../context/AuthContext';
 
 const getBranchIdFromUser = (user: any) => {
   if (!user) return null;
@@ -46,13 +47,71 @@ const resolveBranchId = async () => {
 };
 
 export default function StaffTabsLayout() {
+  const router = useRouter();
+  const { logout } = useAuth();
   const [hasPendingOngoingStock, setHasPendingOngoingStock] = useState(false);
+  const [checkingAccess, setCheckingAccess] = useState(true);
+  const forceLogoutInProgressRef = useRef(false);
+
+  const isUserActive = (value: any) => value === true || value === 1 || value === '1';
+
+  const forceLogoutDisabledUser = async (userData?: any) => {
+    if (forceLogoutInProgressRef.current) return;
+    forceLogoutInProgressRef.current = true;
+    console.log('[STAFF ACCESS] Disabled user detected, forcing logout', {
+      userId: userData?.id,
+      is_active: userData?.is_active,
+    });
+    Alert.alert(
+      'Session Notice',
+      'Your Account Has Been Disabled or Session Expire, please message admin or try logging in again'
+    );
+    try {
+      await logout();
+    } catch (e) {
+      console.log('[STAFF ACCESS] context logout failed; fallback clear', e);
+      await AsyncStorage.multiRemove([
+        'token',
+        'user',
+        'role',
+        'isLoggedIn',
+        'currentStaffUsername',
+      ]);
+    }
+    router.replace('/Login');
+  };
+
+  const validateActiveSession = async () => {
+    try {
+      const response = await api.get('me');
+      const me = response?.data;
+      if (!isUserActive(me?.is_active)) {
+        await forceLogoutDisabledUser(me);
+        return false;
+      }
+      if (me) {
+        await AsyncStorage.setItem('user', JSON.stringify(me));
+      }
+      return true;
+    } catch (e: any) {
+      if (e?.response?.status === 401 || e?.response?.status === 403) {
+        await forceLogoutDisabledUser();
+        return false;
+      }
+      console.log('[STAFF ACCESS] session validation failed:', e?.response?.status, e?.message);
+      return true;
+    }
+  };
 
   useEffect(() => {
     let interval: any = null;
+    let authInterval: any = null;
+    let alive = true;
 
     const refreshPending = async () => {
       try {
+        const stillAllowed = await validateActiveSession();
+        if (!stillAllowed) return;
         const branchId = await resolveBranchId();
         console.log('[TABS] resolved branchId for pending:', branchId);
         const params = branchId ? { branch_id: branchId } : {};
@@ -65,12 +124,33 @@ export default function StaffTabsLayout() {
       }
     };
 
-    refreshPending();
+    const boot = async () => {
+      const allowed = await validateActiveSession();
+      if (!alive) return;
+      setCheckingAccess(false);
+      if (!allowed) return;
+      refreshPending();
+      authInterval = setInterval(() => {
+        validateActiveSession();
+      }, 10000);
+    };
+
+    boot();
     interval = setInterval(refreshPending, 30 * 1000);
     return () => {
+      alive = false;
       if (interval) clearInterval(interval);
+      if (authInterval) clearInterval(authInterval);
     };
   }, []);
+
+  if (checkingAccess) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white">
+        <ActivityIndicator size="large" color="#DC2626" />
+      </View>
+    );
+  }
 
   return (
     <Tabs

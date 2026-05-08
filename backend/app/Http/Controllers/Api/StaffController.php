@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Database\QueryException;
 
 class StaffController extends Controller
 {
@@ -150,8 +151,21 @@ class StaffController extends Controller
     public function destroy($id)
     {
         $staff = User::findOrFail($id);
-        $staff->delete();
-        return response()->json(['message' => 'Staff deleted successfully']);
+
+        try {
+            $staff->delete();
+            return response()->json(['message' => 'Staff deleted successfully']);
+        } catch (QueryException $e) {
+            // Common case: staff has sales records; DB FK prevents delete.
+            if ((string) $e->getCode() === '23000') {
+                return response()->json([
+                    'message' => 'Cannot delete this staff because there are sales records linked to this account. Disable the staff instead.',
+                    'code' => 'STAFF_DELETE_CONSTRAINT',
+                    'suggested_action' => 'disable',
+                ], 409);
+            }
+            throw $e;
+        }
     }
 }
 

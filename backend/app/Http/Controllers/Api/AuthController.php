@@ -25,11 +25,14 @@ class AuthController extends Controller
                 $query->where('username', $request->username)
                     ->orWhere('email', $request->username);
             })
-            ->where('is_active', true)
             ->first();
 
         if (!$user || !Hash::check($request->password, $user->password)) {
-            return response()->json(['message' => 'Invalid credentials'], 401);
+            return response()->json(['message' => 'Your account has been Disabled or invalid Credentials.'], 401);
+        }
+
+        if (!$user->is_active) {
+            return response()->json(['message' => 'Your account has been Disabled or invalid Credentials.'], 401);
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
