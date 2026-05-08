@@ -165,6 +165,41 @@ export default function AttendanceScreen() {
   const faceWebRef = useRef<FaceDetectionWebViewHandle | null>(null);
   const scanInFlightRef = useRef(false);
   const scanCooldownUntilRef = useRef<number>(0);
+  const TIME_OUT_LOCK_MS = 2 * 60 * 1000;
+  const TIME_OUT_LOCK_KEY = 'attendance_timeOutLockUntil';
+  const [timeOutLockUntil, setTimeOutLockUntil] = useState<number>(0);
+  const [timeOutLockTick, setTimeOutLockTick] = useState<number>(() => Date.now());
+
+  const timeOutLocked = timeOutLockUntil > Date.now();
+  const timeOutLockedMsLeft = Math.max(0, timeOutLockUntil - timeOutLockTick);
+
+  const formatMs = (ms: number) => {
+    const total = Math.ceil(ms / 1000);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  const startTimeOutLock = async (source: 'auto_time_in' | 'manual_time_in') => {
+    const until = Date.now() + TIME_OUT_LOCK_MS;
+    setTimeOutLockUntil(until);
+    console.log('[ATTENDANCE] time-out lock start', { source, until, ms: TIME_OUT_LOCK_MS });
+    try {
+      await AsyncStorage.setItem(TIME_OUT_LOCK_KEY, String(until));
+    } catch (e) {
+      console.log('[ATTENDANCE] failed saving time-out lock', e);
+    }
+  };
+
+  const clearTimeOutLock = async (source: 'time_out' | 'expired' | 'load') => {
+    setTimeOutLockUntil(0);
+    console.log('[ATTENDANCE] time-out lock clear', { source });
+    try {
+      await AsyncStorage.removeItem(TIME_OUT_LOCK_KEY);
+    } catch (e) {
+      console.log('[ATTENDANCE] failed clearing time-out lock', e);
+    }
+  };
 
   const getPhilippinesTime = () => {
     const now = new Date();
@@ -199,6 +234,42 @@ export default function AttendanceScreen() {
   const canTimeIn =
     staffFaceReady && !attendanceLoading && !hasOpenAttendance && !hasCompletedToday;
   const canTimeOut = staffFaceReady && !attendanceLoading && hasOpenAttendance;
+  const canTimeOutEffective = canTimeOut && !timeOutLocked;
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(TIME_OUT_LOCK_KEY);
+        const n = raw ? Number(raw) : 0;
+        if (!mounted) return;
+        if (Number.isFinite(n) && n > Date.now()) {
+          setTimeOutLockUntil(n);
+          console.log('[ATTENDANCE] restored time-out lock', { until: n });
+        } else if (Number.isFinite(n) && n > 0) {
+          await clearTimeOutLock('load');
+        }
+      } catch (e) {
+        console.log('[ATTENDANCE] failed restoring time-out lock', e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!timeOutLocked) return;
+    const id = setInterval(() => setTimeOutLockTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [timeOutLocked]);
+
+  useEffect(() => {
+    if (!timeOutLocked && timeOutLockUntil > 0) {
+      clearTimeOutLock('expired');
+    }
+  }, [timeOutLocked, timeOutLockUntil]);
 
   useEffect(() => {
     loadUserData();
@@ -528,7 +599,7 @@ export default function AttendanceScreen() {
     if (now < scanCooldownUntilRef.current) return;
 
     const shouldTimeIn = mode === 'time_in' && canTimeIn;
-    const shouldTimeOut = mode === 'time_out' && canTimeOut;
+    const shouldTimeOut = mode === 'time_out' && canTimeOutEffective;
     if (!shouldTimeIn && !shouldTimeOut) return;
 
     scanInFlightRef.current = true;
@@ -555,6 +626,7 @@ export default function AttendanceScreen() {
         const response = await api.post('/attendance/time-in', body);
         setAttendance(response.data.attendance || response.data);
         setMode('time_out');
+        startTimeOutLock('auto_time_in');
         const sim = response.data?.similarity;
         const th = response.data?.threshold;
         if (typeof sim === 'number') setScanConfidence(sim);
@@ -574,6 +646,7 @@ export default function AttendanceScreen() {
         const response = await api.put(`/attendance/${attendance.id}/time-out`, body);
         setAttendance(response.data.attendance || response.data);
         setMode('time_in');
+        clearTimeOutLock('time_out');
         const sim = response.data?.similarity;
         const th = response.data?.threshold;
         if (typeof sim === 'number') setScanConfidence(sim);
@@ -713,6 +786,7 @@ export default function AttendanceScreen() {
       if (typeof sim === 'number') setScanConfidence(sim);
       if (typeof th === 'number') setScanThreshold(th);
       setMode('time_out');
+      startTimeOutLock('manual_time_in');
       Alert.alert('Success', `Time In recorded at ${time}`);
       addDebug(`Time In successful`);
     } catch (error: any) {
@@ -728,6 +802,15 @@ export default function AttendanceScreen() {
   const handleTimeOut = async () => {
     if (!attendance?.id) {
       Alert.alert('Error', 'Please time in first');
+      return;
+    }
+
+    if (timeOutLocked) {
+      console.log('[ATTENDANCE] time-out blocked (cooldown)', { msLeft: timeOutLockUntil - Date.now() });
+      Alert.alert(
+        'Please wait',
+        `Time Out will be available in ${formatMs(Math.max(0, timeOutLockUntil - Date.now()))}.`
+      );
       return;
     }
 
@@ -770,6 +853,7 @@ export default function AttendanceScreen() {
       if (typeof sim === 'number') setScanConfidence(sim);
       if (typeof th === 'number') setScanThreshold(th);
       setMode('time_in');
+      clearTimeOutLock('time_out');
       Alert.alert('Success', `Time Out recorded at ${time}`);
       addDebug(`Time Out successful`);
     } catch (error: any) {
@@ -1069,11 +1153,11 @@ export default function AttendanceScreen() {
 
               <TouchableOpacity
                 onPress={() => setMode('time_out')}
-                disabled={!canTimeOut && mode !== 'time_out'}
+                disabled={!canTimeOutEffective && mode !== 'time_out'}
                 className={`flex-1 py-3 rounded-xl ${
                   mode === 'time_out'
                     ? 'bg-rose-600'
-                    : !canTimeOut
+                    : !canTimeOutEffective
                       ? 'bg-transparent opacity-50'
                       : 'bg-white/10'
                 }`}
@@ -1111,9 +1195,16 @@ export default function AttendanceScreen() {
           </View>
 
           <View className="mt-2 flex-row items-center justify-between">
-            <Text className="text-white/70 text-[11px]">
-              {staffUser ? 'Auto scan' : 'Manual scan'} • {mode === 'time_in' ? 'Time In' : 'Time Out'}
-            </Text>
+            <View>
+              <Text className="text-white/70 text-[11px]">
+                {staffUser ? 'Auto scan' : 'Manual scan'} • {mode === 'time_in' ? 'Time In' : 'Time Out'}
+              </Text>
+              {mode === 'time_out' && timeOutLocked ? (
+                <Text className="text-amber-200/90 text-[11px] mt-0.5">
+                  Time Out available in {formatMs(timeOutLockedMsLeft)}
+                </Text>
+              ) : null}
+            </View>
             <Pill
               text={
                 staffUser
@@ -1145,9 +1236,9 @@ export default function AttendanceScreen() {
           <View className="absolute bottom-10 left-0 right-0 items-center px-6">
             <TouchableOpacity
               onPress={mode === 'time_in' ? handleTimeIn : handleTimeOut}
-              disabled={loading || (mode === 'time_in' ? !canTimeIn : !canTimeOut)}
+              disabled={loading || (mode === 'time_in' ? !canTimeIn : !canTimeOutEffective)}
               className={`w-20 h-20 rounded-full justify-center items-center shadow-lg ${
-                loading || (mode === 'time_in' ? !canTimeIn : !canTimeOut)
+                loading || (mode === 'time_in' ? !canTimeIn : !canTimeOutEffective)
                   ? 'bg-gray-500/80'
                   : 'bg-white'
               }`}
@@ -1166,7 +1257,9 @@ export default function AttendanceScreen() {
                     ? 'Time In already recorded today'
                     : 'Time Out previous record first'
                   : 'Tap to Time In'
-                : hasTimedOut
+                : timeOutLocked
+                  ? `Please wait ${formatMs(timeOutLockedMsLeft)}`
+                  : hasTimedOut
                   ? 'Time Out already recorded today'
                   : !hasTimedIn
                     ? 'Time In first'
