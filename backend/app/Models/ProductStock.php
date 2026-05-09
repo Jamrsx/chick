@@ -20,7 +20,10 @@ class ProductStock extends Model
 
     protected $casts = [
         'quantity' => 'decimal:2',
-        'restocked_at' => 'datetime',
+        // Keep restocked_at as plain DB string. Casting it as 'datetime' makes Laravel
+        // treat the stored time as the app timezone (Asia/Manila) and serialize it as
+        // UTC ISO, shifting the displayed clock by 8 hours.
+        'restocked_at' => 'string',
         'received' => 'boolean',
     ];
 

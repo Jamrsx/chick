@@ -19,8 +19,10 @@ class ProductStockDelivery extends Model
     ];
 
     protected $casts = [
-        'restocked_at' => 'datetime',
-        'received_at' => 'datetime',
+        // Keep these as raw DB strings. Casting as 'datetime' applies app-timezone
+        // conversion to UTC on serialize, shifting the displayed clock.
+        'restocked_at' => 'string',
+        'received_at' => 'string',
     ];
 
     public function product()

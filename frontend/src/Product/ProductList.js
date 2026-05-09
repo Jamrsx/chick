@@ -18,31 +18,30 @@ import { getCache, setCache, invalidateCache } from "../utils/cache";
 const { Option } = Select;
 
 /**
- * API sends ISO-8601 in UTC (`...Z`). `toLocaleString` without `timeZone` converts to the
- * browser zone (e.g. Manila), so 06:51Z becomes 2:51 PM — correct local time, but different
- * clock digits than MySQL/phpMyAdmin when those show the UTC column. Use UTC here so the
- * displayed clock matches that stored UTC instant.
+ * Format a backend datetime string literally — no timezone conversion. The API
+ * returns the raw DB value (e.g. "2026-05-10 07:41:38" or "2026-05-10T07:41:38..."),
+ * and we display exactly those clock digits. `new Date()` would shift hours
+ * depending on whether the string contains `Z` or not, so we parse the parts ourselves.
  */
 function formatRestockedAtUtcClock(value) {
   if (value == null || value === "") return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) {
+  const s = String(value).trim();
+
+  const match = s.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) {
     console.warn("[ProductList] invalid restocked_at", value);
     return null;
   }
-  if (process.env.NODE_ENV === "development") {
-    console.log("[ProductList] restocked_at (UTC clock)", value, "→", d.toISOString());
-  }
-  return d.toLocaleString("en-PH", {
-    timeZone: "UTC",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
+
+  const [, year, month, day, hh, mm, ss = "00"] = match;
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthName = monthNames[parseInt(month, 10) - 1] || month;
+
+  const hour24 = parseInt(hh, 10);
+  const ampm = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = ((hour24 + 11) % 12) + 1;
+
+  return `${monthName} ${parseInt(day, 10)}, ${year}, ${String(hour12).padStart(2, "0")}:${mm}:${ss} ${ampm}`;
 }
 
 function ProductList() {

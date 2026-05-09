@@ -192,29 +192,43 @@ const DashboardScreen = () => {
         params: { ...branchParams, start_date: monthStart, end_date: nextMonthStart },
       });
 
-      const mappedStock: StockItem[] = (productsRes.data || []).map((item: any) => {
-        // Find stock for user's branch
-        const branchStock = (item.product_stocks || []).find((s: any) =>
-          idsEqual(s.branch_id, branchId)
-        );
-        
-        const quantity = branchStock?.quantity || 0;
-        const minStock = branchStock?.minimum_stock || 0;
-        const status: StockStatus = quantity <= 0 ? 'Out of Stock' : quantity <= minStock ? 'Low Stock' : 'In Stock';
-        
-        return {
-          id: String(item.id),
-          name: item.name,
-          category: item.category || 'Product',
-          type: 'Regular',
-          quantity,
-          price: Number(item.price || 0),
-          minStock,
-          status,
-          branchStock: branchStock,
-          product_stocks: item.product_stocks,
-        };
+      const mappedStock: StockItem[] = (productsRes.data || [])
+        .map((item: any) => {
+          const branchStock = (item.product_stocks || []).find((s: any) =>
+            idsEqual(s.branch_id, branchId)
+          );
+
+          const quantity = Number(branchStock?.quantity ?? 0) || 0;
+          const minStock = Number(branchStock?.minimum_stock ?? 0) || 0;
+          const status: StockStatus =
+            quantity <= 0 ? 'Out of Stock' : quantity <= minStock ? 'Low Stock' : 'In Stock';
+
+          return {
+            id: String(item.id),
+            name: item.name,
+            category: item.category || 'Product',
+            type: 'Regular',
+            quantity,
+            price: Number(item.price || 0),
+            minStock,
+            status,
+            branchStock,
+            product_stocks: item.product_stocks,
+          };
+        })
+        // Only list products that have a stock row for this branch. Otherwise every
+        // catalog item appears with quantity 0 (looks like "other branch" inventory).
+        .filter((row: StockItem) => {
+          if (!branchId) return true;
+          return row.branchStock != null;
+        });
+
+      console.log('[DASHBOARD] Stock list filtered by branch', {
+        branchId,
+        totalProducts: (productsRes.data || []).length,
+        shownForBranch: mappedStock.length,
       });
+
       setStockData(mappedStock);
 
       const todaySalesTotal = sumSalesTotal(summaryRes.data || []);

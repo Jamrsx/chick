@@ -850,66 +850,32 @@ export default function POSScreen() {
     const lineTotal = roundMoney(item.price * item.quantity);
 
     return (
-      <View className="border-b border-gray-100 py-4">
-        {/* Row 1: icon + name + delete */}
-        <View className="flex-row items-center mb-3">
-          <View className="bg-red-100 p-3 rounded-full mr-3">
-            <Icon name={item.icon} size={18} color="#DC2626" />
+      <View className="border-b border-gray-100 py-2">
+        {/* Single compact row: icon + name/total + stepper + delete */}
+        <View className="flex-row items-center">
+          <View className="bg-red-100 p-2 rounded-full mr-2">
+            <Icon name={item.icon} size={14} color="#DC2626" />
           </View>
-          <View className="flex-1">
-            <Text className="font-semibold text-base text-gray-800">{item.name}</Text>
-            <Text className="text-gray-400 text-xs">
-              ₱{item.price} × {formatQtyForDisplay(item.quantity)} = <Text className="text-gray-700 font-bold">₱{lineTotal}</Text>
+
+          <View className="flex-1 mr-2">
+            <Text className="font-semibold text-sm text-gray-800" numberOfLines={1}>{item.name}</Text>
+            <Text className="text-gray-400 text-[11px]" numberOfLines={1}>
+              ₱{item.price} × {formatQtyForDisplay(item.quantity)} ={' '}
+              <Text className="text-gray-700 font-bold">₱{lineTotal}</Text>
             </Text>
           </View>
-          <TouchableOpacity
-            onPress={() => removeFromCart(item.id, item.name)}
-            className="bg-red-50 p-2 rounded-lg ml-2"
-          >
-            <Icon name="delete" size={18} color="#DC2626" />
-          </TouchableOpacity>
-        </View>
 
-        {/* Row 2: ½ Portion toggle + qty stepper */}
-        <View className="flex-row items-center justify-between">
-          {/* ½ Portion checkbox */}
-          <TouchableOpacity
-            onPress={() => toggleHalfPortion(item.id)}
-            activeOpacity={0.75}
-            className={`flex-row items-center px-3 py-2 rounded-xl border ${
-              isHalf
-                ? 'bg-amber-50 border-amber-400'
-                : 'bg-gray-50 border-gray-200'
-            }`}
-          >
-            <View
-              className={`w-5 h-5 rounded-md items-center justify-center mr-2 border ${
-                isHalf ? 'bg-amber-500 border-amber-500' : 'bg-white border-gray-300'
-              }`}
-            >
-              {isHalf && <Icon name="check" size={13} color="white" />}
-            </View>
-            <Text className={`font-bold text-sm ${isHalf ? 'text-amber-800' : 'text-gray-500'}`}>
-              ½ Portion
-            </Text>
-            {isHalf && (
-              <View className="ml-2 bg-amber-200 px-2 py-0.5 rounded-full">
-                <Text className="text-amber-900 text-[10px] font-bold">½ price</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-
-          {/* Qty stepper */}
+          {/* Compact stepper */}
           <View className="flex-row items-center">
             <TouchableOpacity
               onPress={() => updateQuantity(item.id, -QTY_STEP)}
-              className="bg-red-100 w-9 h-9 rounded-full items-center justify-center"
+              className="bg-red-100 w-7 h-7 rounded-full items-center justify-center"
             >
-              <Icon name="remove" size={18} color="#DC2626" />
+              <Icon name="remove" size={14} color="#DC2626" />
             </TouchableOpacity>
-            <View className="bg-gray-100 px-2 py-1.5 rounded-lg mx-1 min-w-[56px] items-center">
+            <View className="bg-gray-100 px-1 py-0.5 rounded-md mx-1 min-w-[40px] items-center">
               <TextInput
-                className="font-bold text-base text-gray-800 text-center w-14 py-0"
+                className="font-bold text-sm text-gray-800 text-center w-10 py-0"
                 keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
                 value={qtyInputs[item.id] ?? formatQtyForDisplay(item.quantity)}
                 onChangeText={(v) => {
@@ -921,12 +887,44 @@ export default function POSScreen() {
             </View>
             <TouchableOpacity
               onPress={() => updateQuantity(item.id, QTY_STEP)}
-              className="bg-green-100 w-9 h-9 rounded-full items-center justify-center"
+              className="bg-green-100 w-7 h-7 rounded-full items-center justify-center"
             >
-              <Icon name="add" size={18} color="#10B981" />
+              <Icon name="add" size={14} color="#10B981" />
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            onPress={() => removeFromCart(item.id, item.name)}
+            className="bg-red-50 p-1.5 rounded-lg ml-2"
+          >
+            <Icon name="delete" size={14} color="#DC2626" />
+          </TouchableOpacity>
         </View>
+
+        {/* ½ Portion as small inline chip (always shown but compact) */}
+        <TouchableOpacity
+          onPress={() => toggleHalfPortion(item.id)}
+          activeOpacity={0.75}
+          className={`self-start mt-1.5 ml-9 flex-row items-center px-2 py-1 rounded-lg border ${
+            isHalf ? 'bg-amber-50 border-amber-400' : 'bg-gray-50 border-gray-200'
+          }`}
+        >
+          <View
+            className={`w-3.5 h-3.5 rounded-sm items-center justify-center mr-1.5 border ${
+              isHalf ? 'bg-amber-500 border-amber-500' : 'bg-white border-gray-300'
+            }`}
+          >
+            {isHalf && <Icon name="check" size={10} color="white" />}
+          </View>
+          <Text className={`font-bold text-[11px] ${isHalf ? 'text-amber-800' : 'text-gray-500'}`}>
+            ½ Portion
+          </Text>
+          {isHalf && (
+            <View className="ml-1.5 bg-amber-200 px-1.5 py-0.5 rounded-full">
+              <Text className="text-amber-900 text-[9px] font-bold">½ price</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
     );
   };
@@ -1193,42 +1191,48 @@ export default function POSScreen() {
                       </View>
                     ) : (
                       <>
-                        {/* Customer + Discount (compact) */}
-                        <View className="bg-white rounded-2xl border border-gray-200 p-3 mb-3">
-                          <View className="flex-row items-center bg-gray-50 border border-gray-200 rounded-2xl">
-                            <View className="p-3">
-                              <Icon name="person" size={18} color="#6B7280" />
+                        {/* Customer + Senior Discount (single compact row) */}
+                        <View className="flex-row items-center mb-2 gap-2">
+                          <View className="flex-1 flex-row items-center bg-gray-50 border border-gray-200 rounded-xl">
+                            <View className="px-2">
+                              <Icon name="person" size={16} color="#6B7280" />
                             </View>
                             <TextInput
-                              className="flex-1 p-3 text-base"
+                              className="flex-1 py-2 pr-2 text-sm"
                               placeholder="Customer name"
                               value={customerName}
                               onChangeText={setCustomerName}
                             />
                           </View>
-
                           <TouchableOpacity
                             onPress={() => setSeniorDiscount((p) => !p)}
-                            className="mt-2 bg-gray-50 border border-gray-200 rounded-2xl p-3"
                             activeOpacity={0.85}
+                            className={`flex-row items-center px-2.5 py-2 rounded-xl border ${
+                              seniorDiscount ? 'bg-green-50 border-green-400' : 'bg-gray-50 border-gray-200'
+                            }`}
                           >
-                            <View className="flex-row items-center justify-between">
-                              <View className="flex-row items-center">
-                                <View className={`w-6 h-6 rounded-md items-center justify-center ${seniorDiscount ? 'bg-green-600' : 'bg-white'} border border-gray-300`}>
-                                  {seniorDiscount && <Icon name="check" size={18} color="white" />}
-                                </View>
-                                <View className="ml-3">
-                                  <Text className="text-gray-900 font-bold">Senior Discount</Text>
-                                  <Text className="text-gray-500 text-xs">20% off</Text>
-                                </View>
-                              </View>
-                              <Text className="text-gray-700 font-bold">{seniorDiscount ? `- ₱${discountAmount}` : 'Off'}</Text>
+                            <View
+                              className={`w-4 h-4 rounded-sm items-center justify-center mr-1.5 border ${
+                                seniorDiscount ? 'bg-green-600 border-green-600' : 'bg-white border-gray-300'
+                              }`}
+                            >
+                              {seniorDiscount && <Icon name="check" size={11} color="white" />}
                             </View>
+                            <Text
+                              className={`text-[11px] font-bold ${
+                                seniorDiscount ? 'text-green-700' : 'text-gray-600'
+                              }`}
+                            >
+                              Senior 20%
+                            </Text>
+                            {seniorDiscount && (
+                              <Text className="text-green-700 text-[11px] font-bold ml-1">-₱{discountAmount}</Text>
+                            )}
                           </TouchableOpacity>
                         </View>
 
-                        {/* Cart Items (only this scrolls) */}
-                        <View className="bg-gray-50 rounded-2xl p-3 mb-3 border border-gray-100">
+                        {/* Cart Items list */}
+                        <View className="bg-gray-50 rounded-2xl px-3 pt-1 pb-2 mb-3 border border-gray-100">
                           {cart.map((item) => (
                             <View key={item.id}>
                               {renderCartItem({ item })}
@@ -1236,52 +1240,53 @@ export default function POSScreen() {
                           ))}
                         </View>
 
-                        <View style={{ height: 12 }} />
+                        <View style={{ height: 8 }} />
                       </>
                     )}
                   </ScrollView>
 
-                  {/* Sticky bottom panel (no scrolling) */}
+                  {/* Sticky bottom panel (compact) */}
                   {cart.length > 0 && (
-                    <View className="px-4 pt-3 border-t border-gray-100" style={{ paddingBottom: Math.max(14, insets.bottom + 14) }}>
-                      {/* Total row */}
-                      <View className="bg-green-500 p-3 rounded-2xl mb-3">
-                        <View className="flex-row justify-between items-center">
-                          <View>
-                            <Text className="text-white/90 text-[11px] font-semibold uppercase tracking-wider mb-0.5">Total</Text>
-                            <Text className="text-white font-bold text-2xl">₱{total}</Text>
-                            {seniorDiscount && (
-                              <Text className="text-white/90 text-[11px] mt-0.5">-₱{discountAmount} (from ₱{subtotal})</Text>
-                            )}
-                          </View>
-                          <View className="bg-green-600 p-3 rounded-2xl">
-                            <Icon name="payments" size={22} color="white" />
-                          </View>
+                    <View className="px-3 pt-2 border-t border-gray-100" style={{ paddingBottom: Math.max(10, insets.bottom + 8) }}>
+                      {/* Total row (compact) */}
+                      <View className="bg-green-500 px-3 py-2 rounded-xl mb-2 flex-row justify-between items-center">
+                        <View>
+                          <Text className="text-white/90 text-[10px] font-semibold uppercase tracking-wider">Total</Text>
+                          <Text className="text-white font-bold text-xl">₱{total}</Text>
                         </View>
+                        {seniorDiscount ? (
+                          <Text className="text-white/90 text-[11px]">-₱{discountAmount} of ₱{subtotal}</Text>
+                        ) : null}
                       </View>
 
-                      {/* Quick cash + input */}
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="mb-2" nestedScrollEnabled={true}>
+                      {/* Quick cash chips */}
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        className="mb-2"
+                        nestedScrollEnabled={true}
+                      >
                         <View className="flex-row">
                           {quickAddAmounts.map((amount) => (
                             <TouchableOpacity
                               key={amount}
                               onPress={() => setCash(amount.toString())}
-                              className="bg-red-50 border border-red-200 px-4 py-2.5 rounded-xl mr-2"
+                              className="bg-red-50 border border-red-200 px-3 py-1.5 rounded-lg mr-2"
                             >
-                              <Text className="text-red-600 font-bold">₱{amount}</Text>
+                              <Text className="text-red-600 font-bold text-xs">₱{amount}</Text>
                             </TouchableOpacity>
                           ))}
                         </View>
                       </ScrollView>
 
+                      {/* Cash input (compact) */}
                       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
-                        <View className="flex-row items-center bg-white border-2 border-gray-300 rounded-2xl">
-                          <View className="bg-red-600 p-3 rounded-l-2xl">
-                            <Icon name="attach-money" size={20} color="white" />
+                        <View className="flex-row items-center bg-white border-2 border-gray-300 rounded-xl">
+                          <View className="bg-red-600 px-2.5 py-2 rounded-l-xl">
+                            <Icon name="attach-money" size={16} color="white" />
                           </View>
                           <TextInput
-                            className="flex-1 p-4 text-base"
+                            className="flex-1 px-3 py-2 text-sm"
                             placeholder="Cash amount"
                             keyboardType="numeric"
                             value={cash.toString()}
@@ -1289,42 +1294,31 @@ export default function POSScreen() {
                             onFocus={zoomIn}
                             onBlur={zoomOut}
                           />
+                          {cash && Number(cash) >= total && (
+                            <View className="bg-green-500 px-3 py-2 rounded-r-xl">
+                              <Text className="text-white font-bold text-xs">Change ₱{change}</Text>
+                            </View>
+                          )}
                         </View>
                       </Animated.View>
 
-                      {cash && Number(cash) >= total && (
-                        <View className="bg-green-500 p-3 rounded-2xl mt-3">
-                          <View className="flex-row justify-between items-center">
-                            <View className="flex-row items-center">
-                              <Icon name="check-circle" size={18} color="white" />
-                              <Text className="text-white font-bold ml-2">Change</Text>
-                            </View>
-                            <Text className="text-white font-bold text-xl">₱{change}</Text>
-                          </View>
-                        </View>
-                      )}
-
                       {cash && Number(cash) < total && Number(cash) > 0 && (
-                        <View className="bg-red-50 border border-red-200 p-3 rounded-2xl mt-3">
-                          <View className="flex-row items-center justify-center">
-                            <Icon name="error-outline" size={18} color="#DC2626" />
-                            <Text className="text-red-600 text-center ml-2 font-medium">
-                              Need ₱{total - Number(cash)} more
-                            </Text>
-                          </View>
+                        <View className="bg-red-50 border border-red-200 px-2.5 py-1.5 rounded-lg mt-2 flex-row items-center justify-center">
+                          <Icon name="error-outline" size={14} color="#DC2626" />
+                          <Text className="text-red-600 text-xs ml-1.5 font-medium">
+                            Need ₱{total - Number(cash)} more
+                          </Text>
                         </View>
                       )}
 
                       <Animated.View style={{ transform: [{ scale: buttonScaleAnim }] }}>
                         <TouchableOpacity
                           onPress={handleCheckout}
-                          className="bg-green-500 py-4 mt-3 rounded-2xl items-center shadow-lg"
+                          className="bg-green-500 py-3 mt-2 rounded-xl items-center shadow-lg flex-row justify-center"
                           activeOpacity={0.85}
                         >
-                          <View className="flex-row items-center">
-                            <Icon name="check-circle" size={20} color="white" />
-                            <Text className="text-white font-bold text-base ml-2">Complete Order</Text>
-                          </View>
+                          <Icon name="check-circle" size={18} color="white" />
+                          <Text className="text-white font-bold text-sm ml-2">Complete Order</Text>
                         </TouchableOpacity>
                       </Animated.View>
                     </View>
