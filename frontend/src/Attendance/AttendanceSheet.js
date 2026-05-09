@@ -7,7 +7,8 @@ import {
   UserOutlined,
   ReloadOutlined,
   DownOutlined,
-  RightOutlined
+  RightOutlined,
+  CalendarOutlined
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../config/api";
@@ -44,6 +45,7 @@ function AttendanceAdmin() {
   const [selectedMonth, setSelectedMonth] = useState(
     dayjs().format("YYYY-MM")
   );
+  const [monthPickerOpen, setMonthPickerOpen] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -1036,23 +1038,48 @@ function AttendanceAdmin() {
         {/* Filters */}
         <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
           <div className="flex flex-wrap gap-4 items-center justify-between">
-            <div className="flex gap-4 items-center">
-              <div>
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center w-full sm:w-auto">
+              <div className="w-full sm:w-auto">
                 <label className="text-xs text-gray-500 block mb-1">Select Month</label>
-                <AntDatePicker
-                  value={dayjs(selectedMonth)}
-                  onChange={(date) => {
-                    if (date) {
-                      setSelectedMonth(date.format("YYYY-MM"));
-                    }
-                  }}
-                  format="YYYY-MM"
-                  picker="month"
-                  className="w-full"
-                  size="middle"
-                />
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setMonthPickerOpen(true)}
+                    className="w-full sm:w-auto inline-flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-gray-300 bg-white text-sm text-gray-800 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    aria-label="Select month"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <CalendarOutlined className="text-gray-500" />
+                      <span className="font-medium">
+                        {dayjs(selectedMonth).format("MMMM YYYY")}
+                      </span>
+                    </span>
+                    <span className="text-xs text-gray-400">Tap to change</span>
+                  </button>
+                  <AntDatePicker
+                    value={dayjs(selectedMonth)}
+                    open={monthPickerOpen}
+                    onOpenChange={(open) => setMonthPickerOpen(open)}
+                    onChange={(date) => {
+                      if (date) {
+                        setSelectedMonth(date.format("YYYY-MM"));
+                      }
+                      setMonthPickerOpen(false);
+                    }}
+                    format="YYYY-MM"
+                    picker="month"
+                    inputReadOnly
+                    size="middle"
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      opacity: 0,
+                      pointerEvents: "none",
+                    }}
+                  />
+                </div>
               </div>
-              <div>
+              <div className="w-full sm:w-auto">
                 <label className="text-xs text-gray-500 block mb-1">Search Staff</label>
                 <div className="flex items-center border border-gray-300 rounded-md px-3 py-1.5">
                   <SearchOutlined className="text-gray-400 text-sm mr-2" />
@@ -1061,7 +1088,7 @@ function AttendanceAdmin() {
                     placeholder="Enter name..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="text-sm outline-none w-48"
+                    className="text-sm outline-none w-full sm:w-48"
                   />
                 </div>
               </div>

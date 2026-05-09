@@ -21,6 +21,7 @@ function EmployeeTracker() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedDate, setSelectedDate] = useState(dayjs().format("YYYY-MM-DD"));
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [attendanceData, setAttendanceData] = useState([]);
   const [staffSalesData, setStaffSalesData] = useState([]);
   const [posCheckoutData, setPosCheckoutData] = useState([]);
@@ -90,6 +91,7 @@ function EmployeeTracker() {
   const loadEmployeeData = async (forceRefresh = false) => {
     setLoading(true);
     setError("");
+    console.log("[EmployeeTracker] Loading data...", { selectedDate, forceRefresh });
     try {
       // Use date-specific cache key
       const cacheKey = `employee_tracker_${selectedDate}`;
@@ -105,23 +107,25 @@ function EmployeeTracker() {
         setLoading(false);
         
         // Still fetch fresh data in background to update cache
-        fetchAndUpdateCache(cacheKey);
+        fetchAndUpdateCache(cacheKey, { silent: true });
         return;
       }
 
       // Otherwise, fetch from backend
-      await fetchAndUpdateCache(cacheKey);
+      await fetchAndUpdateCache(cacheKey, { silent: false });
     } catch (e) {
+      console.error("[EmployeeTracker] Load failed:", e);
       setError(e?.message || "Failed to load employee tracker data from backend.");
       setAttendanceData([]);
       setStaffSalesData([]);
+      setPosCheckoutData([]);
       setPerformanceData([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchAndUpdateCache = async (cacheKey) => {
+  const fetchAndUpdateCache = async (cacheKey, { silent = false } = {}) => {
     try {
       const results = await Promise.allSettled([
         api.get("/staff"),
@@ -280,12 +284,22 @@ function EmployeeTracker() {
       setStaffSalesData(staffSalesData);
       setPosCheckoutData(posCheckoutData);
       setPerformanceData(performanceData);
+
+      console.log("[EmployeeTracker] Fetch success", {
+        selectedDate,
+        staffCount: Array.isArray(staff) ? staff.length : 0,
+        attendanceCount: Array.isArray(attendanceData) ? attendanceData.length : 0,
+        staffSalesCount: Array.isArray(staffSalesData) ? staffSalesData.length : 0,
+        posCheckoutCount: Array.isArray(posCheckoutData) ? posCheckoutData.length : 0,
+        performanceCount: Array.isArray(performanceData) ? performanceData.length : 0,
+        silent,
+      });
       
       // Cache the fetched data (30 seconds TTL)
       setCache(cacheKey, { attendanceData, staffSalesData, posCheckoutData, performanceData }, 30 * 1000);
     } catch (e) {
-      console.error('Background fetch failed:', e);
-      // Don't show error for background fetch failures
+      console.error(silent ? "[EmployeeTracker] Background fetch failed:" : "[EmployeeTracker] Fetch failed:", e);
+      if (!silent) throw e;
     }
   };
 
@@ -295,7 +309,7 @@ function EmployeeTracker() {
     // Periodic cache update every 30 seconds to keep data fresh
     const interval = setInterval(() => {
       const cacheKey = `employee_tracker_${selectedDate}`;
-      fetchAndUpdateCache(cacheKey);
+      fetchAndUpdateCache(cacheKey, { silent: true });
     }, 30 * 1000);
     
     return () => clearInterval(interval);
@@ -570,9 +584,29 @@ function EmployeeTracker() {
       {/* Scrollable Content Area */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-7xl mx-auto px-6 py-6">
+          {loading && (
+            <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-lg px-4 py-3 mb-6 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <ReloadOutlined className="animate-spin" />
+                <div className="text-sm">
+                  <div className="font-semibold">Fetching latest data from backend…</div>
+                  <div className="text-blue-700/80">Date: {selectedDate}</div>
+                </div>
+              </div>
+              <Button size="small" onClick={() => loadEmployeeData(true)}>
+                Retry now
+              </Button>
+            </div>
+          )}
           {error && (
-            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6">
-              {error}
+            <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6 flex items-start justify-between gap-4">
+              <div className="whitespace-pre-line text-sm">
+                <div className="font-semibold mb-1">Failed to load data</div>
+                <div>{error}</div>
+              </div>
+              <Button icon={<ReloadOutlined />} onClick={() => loadEmployeeData(true)}>
+                Retry
+              </Button>
             </div>
           )}
           {/* Summary Cards */}
@@ -630,22 +664,47 @@ function EmployeeTracker() {
           {/* Filters */}
           <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
             <div className="flex flex-wrap gap-4 items-center justify-between">
-              <div className="flex gap-4 items-center">
-                <div>
+              <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center w-full sm:w-auto">
+                <div className="w-full sm:w-auto">
                   <label className="text-xs text-gray-500 block mb-1">Select Date</label>
-                  <AntDatePicker
-                    value={dayjs(selectedDate)}
-                    onChange={(date) => {
-                      if (date) {
-                        setSelectedDate(date.format("YYYY-MM-DD"));
-                      }
-                    }}
-                    format="YYYY-MM-DD"
-                    className="w-full"
-                    size="middle"
-                  />
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setDatePickerOpen(true)}
+                      className="w-full sm:w-auto inline-flex items-center justify-between gap-3 px-3 py-2 rounded-md border border-gray-300 bg-white text-sm text-gray-800 hover:bg-gray-50 active:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      aria-label="Select date"
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <CalendarOutlined className="text-gray-500" />
+                        <span className="font-medium">{selectedDate}</span>
+                      </span>
+                      <span className="text-xs text-gray-400">Tap to change</span>
+                    </button>
+
+                    {/* Hidden DatePicker used only for the calendar popup */}
+                    <AntDatePicker
+                      value={dayjs(selectedDate)}
+                      open={datePickerOpen}
+                      onOpenChange={(open) => setDatePickerOpen(open)}
+                      onChange={(date) => {
+                        if (date) {
+                          setSelectedDate(date.format("YYYY-MM-DD"));
+                        }
+                        setDatePickerOpen(false);
+                      }}
+                      format="YYYY-MM-DD"
+                      inputReadOnly
+                      size="middle"
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        opacity: 0,
+                        pointerEvents: "none",
+                      }}
+                    />
+                  </div>
                 </div>
-                <div>
+                <div className="w-full sm:w-auto">
                   <label className="text-xs text-gray-500 block mb-1">Search Employee</label>
                   <div className="flex items-center border border-gray-300 rounded-md px-3 py-1.5">
                     <SearchOutlined className="text-gray-400 text-sm mr-2" />
@@ -654,7 +713,7 @@ function EmployeeTracker() {
                       placeholder="Enter name..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="text-sm outline-none w-48"
+                      className="text-sm outline-none w-full sm:w-48"
                     />
                   </div>
                 </div>
@@ -694,7 +753,7 @@ function EmployeeTracker() {
                   {filteredAttendance.length === 0 ? (
                     <tr>
                       <td colSpan={attendanceColumns.length} className="text-center py-12 text-gray-500">
-                        No attendance records found.
+                        No attendance records found for <span className="font-semibold">{selectedDate}</span>.
                       </td>
                     </tr>
                   ) : (
@@ -752,7 +811,7 @@ function EmployeeTracker() {
                   {filteredSales.length === 0 ? (
                     <tr>
                       <td colSpan={salesColumns.length} className="text-center py-12 text-gray-500">
-                        No sales records found.
+                        No sales records found for <span className="font-semibold">{selectedDate}</span>.
                       </td>
                     </tr>
                   ) : (
@@ -845,7 +904,7 @@ function EmployeeTracker() {
                   {pagedPosCheckouts.length === 0 ? (
                     <tr>
                       <td colSpan={11} className="text-center py-12 text-gray-500">
-                        No checkout transactions found.
+                        No checkout transactions found for <span className="font-semibold">{selectedDate}</span>.
                       </td>
                     </tr>
                   ) : (
@@ -923,7 +982,7 @@ function EmployeeTracker() {
                   {filteredPerformance.length === 0 ? (
                     <tr>
                       <td colSpan={performanceColumns.length} className="text-center py-12 text-gray-500">
-                        No performance records found.
+                        No performance records found for <span className="font-semibold">{selectedDate}</span>.
                       </td>
                     </tr>
                   ) : (
