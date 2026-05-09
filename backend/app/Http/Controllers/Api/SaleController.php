@@ -151,7 +151,17 @@ class SaleController extends Controller
             'senior_discount' => 'sometimes|boolean',
             'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|exists:products,id',
-            'items.*.quantity' => 'required|integer|min:1',
+            'items.*.quantity' => [
+                'required',
+                'numeric',
+                'min:0.5',
+                function (string $attribute, mixed $value, \Closure $fail) {
+                    $q = round((float) $value, 2);
+                    if (abs($q * 2 - round($q * 2)) > 0.001) {
+                        $fail('Each quantity must be in halves (0.5, 1, 1.5, …).');
+                    }
+                },
+            ],
             'cash_collected' => 'required|numeric|min:0',
             'payment_method' => 'sometimes|string',
         ]);
@@ -164,23 +174,33 @@ class SaleController extends Controller
 
             foreach ($validated['items'] as $item) {
                 $product = \App\Models\Product::find($item['product_id']);
-                $total = $product->price * $item['quantity'];
+                $qty = round((float) $item['quantity'], 2);
+                $unitPrice = (float) $product->price;
+                $total = round($unitPrice * $qty, 2);
                 $subtotal += $total;
+
+                \Log::info('[SALE STORE] Line item', [
+                    'product_id' => $item['product_id'],
+                    'quantity' => $qty,
+                    'unit_price' => $unitPrice,
+                    'line_total' => $total,
+                ]);
 
                 // Check and update stock
                 $stock = ProductStock::where('product_id', $item['product_id'])
                     ->where('branch_id', $validated['branch_id'])
                     ->first();
 
-                if (!$stock || $stock->quantity < $item['quantity']) {
+                $avail = round((float) ($stock->quantity ?? 0), 2);
+                if (! $stock || $avail + 0.00001 < $qty) {
                     throw new \Exception("Insufficient stock for product: {$product->name}");
                 }
 
-                $stock->decrement('quantity', $item['quantity']);
+                $stock->decrement('quantity', $qty);
 
                 $items[] = [
                     'product_id' => $item['product_id'],
-                    'quantity' => $item['quantity'],
+                    'quantity' => $qty,
                     'price' => $product->price,
                     'total' => $total,
                 ];

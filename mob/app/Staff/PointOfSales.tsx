@@ -25,6 +25,25 @@ import { api } from '../../config/api';
 
 const { height: screenHeight } = Dimensions.get('window');
 
+/** Portions sold in halves (½ bird, whole, 1½, …). */
+const QTY_STEP = 0.5;
+
+function snapQtyToHalfStep(n: number): number {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return 0;
+  return Math.round(x * 2) / 2;
+}
+
+function roundMoney(n: number): number {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+function formatQtyForDisplay(n: number): string {
+  const s = snapQtyToHalfStep(Number(n));
+  const r = Math.round(s * 100) / 100;
+  return Number.isInteger(r) ? String(Math.round(r)) : String(r);
+}
+
 type StockStatus = 'Low Stock' | 'In Stock' | 'Out of Stock';
 
 type StockBranch = {
@@ -87,6 +106,7 @@ export default function POSScreen() {
   const [collapsedReceived, setCollapsedReceived] = useState(false);
   const [collapsedNotReceived, setCollapsedNotReceived] = useState(false);
   const [orderModalVisible, setOrderModalVisible] = useState(false);
+  const [halfPortions, setHalfPortions] = useState<Record<string, boolean>>({});
   
   const categories = ['All', 'Lechon Manok', 'Liempo'];
   
@@ -94,7 +114,10 @@ export default function POSScreen() {
     ? products 
     : products.filter(p => p.category === selectedCategory);
   
-  const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const subtotal = cart.reduce(
+    (sum, item) => sum + roundMoney(item.price * item.quantity),
+    0
+  );
   // Philippines Senior Citizen Discount: 20% (RA 9994)
   const discountAmount = seniorDiscount ? Math.round(subtotal * 0.2 * 100) / 100 : 0;
   const total = Math.max(subtotal - discountAmount, 0);
@@ -422,39 +445,49 @@ export default function POSScreen() {
     ]).start(callback);
   };
 
-  const addToCart = (product: StockItem) => {
-    // Check if product is in stock
+  const addOrIncrementCart = (product: StockItem, addQty: number) => {
+    const delta = snapQtyToHalfStep(addQty);
+    if (delta <= 0) return;
+
     if (product.quantity <= 0) {
       Alert.alert('Out of Stock', `${product.name} is currently out of stock.`);
       return;
     }
-    
+
     animateButton();
-    setCart(prevCart => {
-      const existingItem = prevCart.find(item => item.id === product.id);
-      const currentCartQuantity = existingItem ? existingItem.quantity : 0;
-      
-      // Check if adding more than available stock
-      if (currentCartQuantity + 1 > product.quantity) {
-        Alert.alert('Insufficient Stock', `Only ${product.quantity} ${product.name} available in stock.`);
+    setCart((prevCart) => {
+      const existingItem = prevCart.find((item) => item.id === product.id);
+      const currentQty = existingItem ? existingItem.quantity : 0;
+      const nextQty = snapQtyToHalfStep(currentQty + delta);
+
+      if (nextQty <= 0) return prevCart;
+
+      if (nextQty - Number(product.quantity) > 1e-6) {
+        Alert.alert(
+          'Insufficient Stock',
+          `Only ${formatQtyForDisplay(product.quantity)} ${product.name} available in stock.`
+        );
         return prevCart;
       }
-      
+
+      setQtyInputs((prev) => ({
+        ...prev,
+        [product.id]: formatQtyForDisplay(nextQty),
+      }));
+
       if (existingItem) {
-        setQtyInputs((prev) => ({ ...prev, [product.id]: String(currentCartQuantity + 1) }));
-        return prevCart.map(item =>
-          item.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
-            : item
+        return prevCart.map((item) =>
+          item.id === product.id ? { ...item, quantity: nextQty } : item
         );
       }
-      setQtyInputs((prev) => ({ ...prev, [product.id]: '1' }));
-      return [...prevCart, { ...product, quantity: 1 }];
+      return [...prevCart, { ...product, quantity: nextQty }];
     });
 
-    // Open order modal whenever staff selects a product
+    console.log('[POS CART] addOrIncrementCart', product.id, product.name, 'delta', delta);
     setOrderModalVisible(true);
   };
+
+  const addToCart = (product: StockItem) => addOrIncrementCart(product, 1);
 
   const updateQuantity = (id: string, delta: number) => {
     setCart(prevCart => {
@@ -464,14 +497,18 @@ export default function POSScreen() {
       const product = products.find(p => p.id === id);
       if (!product) return prevCart;
       
-      const newQuantity = item.quantity + delta;
+      const newQuantity = snapQtyToHalfStep(item.quantity + delta);
 
-      // Keep editable input in sync with cart quantity
-      setQtyInputs((prev) => ({ ...prev, [id]: String(Math.max(newQuantity, 0)) }));
+      setQtyInputs((prev) => ({
+        ...prev,
+        [id]: formatQtyForDisplay(Math.max(newQuantity, 0)),
+      }));
       
-      // Check if exceeding stock
-      if (newQuantity > product.quantity) {
-        Alert.alert('Insufficient Stock', `Only ${product.quantity} ${product.name} available in stock.`);
+      if (newQuantity > Number(product.quantity) + 1e-6) {
+        Alert.alert(
+          'Insufficient Stock',
+          `Only ${formatQtyForDisplay(product.quantity)} ${product.name} available in stock.`
+        );
         return prevCart;
       }
       
@@ -488,32 +525,47 @@ export default function POSScreen() {
   };
 
   const setItemQuantity = (id: string, rawValue: string) => {
-    const sanitized = rawValue.replace(/[^\d]/g, '');
+    let clean = rawValue.replace(/[^\d.]/g, '');
+    const firstDot = clean.indexOf('.');
+    if (firstDot !== -1) {
+      clean =
+        clean.slice(0, firstDot + 1) + clean.slice(firstDot + 1).replace(/\./g, '');
+    }
 
-    // Keep the raw input so staff can temporarily clear it while typing.
-    setQtyInputs((prev) => ({ ...prev, [id]: sanitized }));
+    setQtyInputs((prev) => ({ ...prev, [id]: clean }));
 
-    // If empty, don't remove/change cart yet (prevents "disappearing" UX).
-    if (sanitized === '') return;
+    if (clean === '' || clean === '.') return;
 
-    const nextQty = Number(sanitized);
+    const parsed = parseFloat(clean);
+    if (Number.isNaN(parsed)) return;
+
+    const nextQty = snapQtyToHalfStep(parsed);
 
     setCart(prevCart => {
       const item = prevCart.find(i => i.id === id);
       if (!item) return prevCart;
 
       const product = products.find(p => p.id === id);
-      const maxQty = Number(product?.quantity || item.quantity || 0);
+      const maxQty = Number(product?.quantity ?? item.quantity ?? 0);
+
+      if (parsed > 0 && Math.abs(parsed - nextQty) > 0.001) {
+        console.log('[POS QTY] Snapped typed quantity to nearest ½:', parsed, '→', nextQty);
+      }
 
       if (nextQty <= 0) {
         return prevCart.filter(i => i.id !== id);
       }
 
-      if (nextQty > maxQty) {
-        Alert.alert('Insufficient Stock', `Only ${maxQty} ${item.name} available in stock.`);
-        setQtyInputs((prev) => ({ ...prev, [id]: String(maxQty) }));
+      if (nextQty - maxQty > 1e-6) {
+        Alert.alert(
+          'Insufficient Stock',
+          `Only ${formatQtyForDisplay(maxQty)} ${item.name} available in stock.`
+        );
+        setQtyInputs((prev) => ({ ...prev, [id]: formatQtyForDisplay(maxQty) }));
         return prevCart.map(i => (i.id === id ? { ...i, quantity: maxQty } : i));
       }
+
+      setQtyInputs((prev) => ({ ...prev, [id]: formatQtyForDisplay(nextQty) }));
 
       return prevCart.map(i => (i.id === id ? { ...i, quantity: nextQty } : i));
     });
@@ -525,9 +577,27 @@ export default function POSScreen() {
       // If staff leaves it blank, revert to current quantity (do not remove item).
       if (raw === '') {
         const current = cart.find((c) => c.id === id);
-        return { ...prev, [id]: current ? String(current.quantity) : '1' };
+        return { ...prev, [id]: current ? formatQtyForDisplay(current.quantity) : '1' };
       }
       return prev;
+    });
+  };
+
+  const toggleHalfPortion = (id: string) => {
+    setHalfPortions((prev) => {
+      const isNowHalf = !prev[id];
+      const targetQty = isNowHalf ? 0.5 : 1;
+      console.log('[POS HALF] Toggle half portion for', id, '→', isNowHalf, 'qty', targetQty);
+
+      setCart((prevCart) =>
+        prevCart.map((item) => {
+          if (item.id !== id) return item;
+          setQtyInputs((q) => ({ ...q, [id]: formatQtyForDisplay(targetQty) }));
+          return { ...item, quantity: targetQty };
+        })
+      );
+
+      return { ...prev, [id]: isNowHalf };
     });
   };
 
@@ -537,7 +607,18 @@ export default function POSScreen() {
       `Remove ${name} from cart?`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: () => setCart(prevCart => prevCart.filter(item => item.id !== id)) }
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            setCart((prevCart) => prevCart.filter((item) => item.id !== id));
+            setHalfPortions((prev) => {
+              const next = { ...prev };
+              delete next[id];
+              return next;
+            });
+          },
+        }
       ]
     );
   };
@@ -607,8 +688,10 @@ export default function POSScreen() {
       return;
     }
     
-    const orderItems = cart.map(item => 
-      `${item.name} x${item.quantity} = ₱${item.price * item.quantity}`
+    const orderItems = cart.map(item =>
+      `${item.name} ×${formatQtyForDisplay(item.quantity)} = ₱${roundMoney(
+        item.price * item.quantity
+      )}`
     ).join('\n');
     
     console.log('[POS CHECKOUT] Cart items:', cart);
@@ -718,7 +801,7 @@ export default function POSScreen() {
         payment_method: 'cash',
         items: cart.map((item) => ({
           product_id: Number(item.id),
-          quantity: item.quantity,
+          quantity: snapQtyToHalfStep(item.quantity),
         })),
       });
       const orderSummary = orderItems || 'No items details available';
@@ -735,6 +818,7 @@ export default function POSScreen() {
       setCash('');
       setCustomerName('');
       setSeniorDiscount(false);
+      setHalfPortions({});
       await loadProducts();
     } catch (error: any) {
       Alert.alert('Checkout Failed', error?.response?.data?.message || 'Failed to save sale to backend.');
@@ -753,6 +837,7 @@ export default function POSScreen() {
           setCash('');
           setCustomerName('');
           setSeniorDiscount(false);
+          setHalfPortions({});
         }}
       ]
     );
@@ -760,50 +845,91 @@ export default function POSScreen() {
 
   const quickAddAmounts = [50, 100, 200, 500, 1000];
 
-  const renderCartItem = ({ item }: { item: typeof cart[0] }) => (
-    <View className="flex-row justify-between items-center border-b border-gray-100 py-4">
-      <View className="flex-1">
-        <View className="flex-row items-center">
+  const renderCartItem = ({ item }: { item: typeof cart[0] }) => {
+    const isHalf = !!halfPortions[item.id];
+    const lineTotal = roundMoney(item.price * item.quantity);
+
+    return (
+      <View className="border-b border-gray-100 py-4">
+        {/* Row 1: icon + name + delete */}
+        <View className="flex-row items-center mb-3">
           <View className="bg-red-100 p-3 rounded-full mr-3">
             <Icon name={item.icon} size={18} color="#DC2626" />
           </View>
           <View className="flex-1">
-            <Text className="font-semibold text-base text-gray-800 mb-1">{item.name}</Text>
-            <Text className="text-gray-500 text-sm">₱{item.price} each</Text>
+            <Text className="font-semibold text-base text-gray-800">{item.name}</Text>
+            <Text className="text-gray-400 text-xs">
+              ₱{item.price} × {formatQtyForDisplay(item.quantity)} = <Text className="text-gray-700 font-bold">₱{lineTotal}</Text>
+            </Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => removeFromCart(item.id, item.name)}
+            className="bg-red-50 p-2 rounded-lg ml-2"
+          >
+            <Icon name="delete" size={18} color="#DC2626" />
+          </TouchableOpacity>
+        </View>
+
+        {/* Row 2: ½ Portion toggle + qty stepper */}
+        <View className="flex-row items-center justify-between">
+          {/* ½ Portion checkbox */}
+          <TouchableOpacity
+            onPress={() => toggleHalfPortion(item.id)}
+            activeOpacity={0.75}
+            className={`flex-row items-center px-3 py-2 rounded-xl border ${
+              isHalf
+                ? 'bg-amber-50 border-amber-400'
+                : 'bg-gray-50 border-gray-200'
+            }`}
+          >
+            <View
+              className={`w-5 h-5 rounded-md items-center justify-center mr-2 border ${
+                isHalf ? 'bg-amber-500 border-amber-500' : 'bg-white border-gray-300'
+              }`}
+            >
+              {isHalf && <Icon name="check" size={13} color="white" />}
+            </View>
+            <Text className={`font-bold text-sm ${isHalf ? 'text-amber-800' : 'text-gray-500'}`}>
+              ½ Portion
+            </Text>
+            {isHalf && (
+              <View className="ml-2 bg-amber-200 px-2 py-0.5 rounded-full">
+                <Text className="text-amber-900 text-[10px] font-bold">½ price</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Qty stepper */}
+          <View className="flex-row items-center">
+            <TouchableOpacity
+              onPress={() => updateQuantity(item.id, -QTY_STEP)}
+              className="bg-red-100 w-9 h-9 rounded-full items-center justify-center"
+            >
+              <Icon name="remove" size={18} color="#DC2626" />
+            </TouchableOpacity>
+            <View className="bg-gray-100 px-2 py-1.5 rounded-lg mx-1 min-w-[56px] items-center">
+              <TextInput
+                className="font-bold text-base text-gray-800 text-center w-14 py-0"
+                keyboardType={Platform.OS === 'ios' ? 'decimal-pad' : 'numeric'}
+                value={qtyInputs[item.id] ?? formatQtyForDisplay(item.quantity)}
+                onChangeText={(v) => {
+                  setHalfPortions((prev) => ({ ...prev, [item.id]: false }));
+                  setItemQuantity(item.id, v);
+                }}
+                onBlur={() => commitQtyInput(item.id)}
+              />
+            </View>
+            <TouchableOpacity
+              onPress={() => updateQuantity(item.id, QTY_STEP)}
+              className="bg-green-100 w-9 h-9 rounded-full items-center justify-center"
+            >
+              <Icon name="add" size={18} color="#10B981" />
+            </TouchableOpacity>
           </View>
         </View>
       </View>
-      <View className="flex-row items-center">
-        <TouchableOpacity
-          onPress={() => updateQuantity(item.id, -1)}
-          className="bg-red-100 w-9 h-9 rounded-full items-center justify-center mr-2"
-        >
-          <Icon name="remove" size={18} color="#DC2626" />
-        </TouchableOpacity>
-        <View className="bg-gray-100 px-2 py-2 rounded-lg min-w-[70px] items-center">
-          <TextInput
-            className="font-bold text-base text-gray-800 text-center w-14 py-0"
-            keyboardType="numeric"
-            value={qtyInputs[item.id] ?? String(item.quantity)}
-            onChangeText={(v) => setItemQuantity(item.id, v)}
-            onBlur={() => commitQtyInput(item.id)}
-          />
-        </View>
-        <TouchableOpacity
-          onPress={() => updateQuantity(item.id, 1)}
-          className="bg-green-100 w-9 h-9 rounded-full items-center justify-center mx-2"
-        >
-          <Icon name="add" size={18} color="#10B981" />
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={() => removeFromCart(item.id, item.name)}
-          className="bg-red-50 p-2 rounded-lg ml-1"
-        >
-          <Icon name="delete" size={18} color="#DC2626" />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
+    );
+  };
 
   if (loading) {
     return (
@@ -932,40 +1058,53 @@ export default function POSScreen() {
                     columnWrapperStyle={{ justifyContent: 'space-between', gap: 12 }}
                     contentContainerStyle={{ paddingBottom: 8 }}
                     renderItem={({ item }) => (
-                      <TouchableOpacity
-                        onPress={() => addToCart(item)}
-                        className={`w-[48%] p-4 mb-4 rounded-2xl items-center shadow-sm border ${
-                          item.quantity <= 0 ? 'bg-gray-50 opacity-50 border-gray-200' : 'bg-white border-gray-100'
-                        }`}
-                        activeOpacity={item.quantity <= 0 ? 1 : 0.7}
-                        disabled={item.quantity <= 0}
-                      >
-                        {item.popular && item.quantity > 0 && (
-                          <View className="absolute top-2 right-2 bg-orange-500 px-2 py-1 rounded-full flex-row items-center">
-                            <Icon name="local-fire-department" size={10} color="white" />
-                            <Text className="text-white text-[10px] font-bold ml-1">BESTSELLER</Text>
+                      <View className="w-[48%] mb-4">
+                        <TouchableOpacity
+                          onPress={() => addToCart(item)}
+                          className={`p-4 rounded-2xl items-center shadow-sm border ${
+                            item.quantity <= 0 ? 'bg-gray-50 opacity-50 border-gray-200' : 'bg-white border-gray-100'
+                          }`}
+                          activeOpacity={item.quantity <= 0 ? 1 : 0.7}
+                          disabled={item.quantity <= 0}
+                        >
+                          {item.popular && item.quantity > 0 && (
+                            <View className="absolute top-2 right-2 bg-orange-500 px-2 py-1 rounded-full flex-row items-center">
+                              <Icon name="local-fire-department" size={10} color="white" />
+                              <Text className="text-white text-[10px] font-bold ml-1">BESTSELLER</Text>
+                            </View>
+                          )}
+                          {item.quantity <= 0 && (
+                            <View className="absolute top-2 right-2 bg-red-500 px-2 py-1 rounded-full">
+                              <Text className="text-white text-[10px] font-bold">OUT OF STOCK</Text>
+                            </View>
+                          )}
+                          <View className="bg-red-100 p-4 rounded-full mb-3">
+                            <Icon name={item.icon} size={28} color="#DC2626" />
                           </View>
-                        )}
-                        {item.quantity <= 0 && (
-                          <View className="absolute top-2 right-2 bg-red-500 px-2 py-1 rounded-full">
-                            <Text className="text-white text-[10px] font-bold">OUT OF STOCK</Text>
+                          <Text className="font-bold text-center text-base text-gray-800 mb-1" numberOfLines={2}>{item.name}</Text>
+                          <Text className="text-gray-500 text-xs text-center mb-3" numberOfLines={1}>{item.description}</Text>
+                          <View className="bg-green-50 px-3 py-1 rounded-full">
+                            <Text className="text-green-600 font-bold text-lg">₱{item.price}</Text>
                           </View>
+                          {item.quantity <= 10 && item.quantity > 0 && (
+                            <View className="flex-row items-center mt-2">
+                              <Icon name="warning" size={12} color="#F59E0B" />
+                              <Text className="text-orange-500 text-xs ml-1">
+                                Only {formatQtyForDisplay(item.quantity)} left!
+                              </Text>
+                            </View>
+                          )}
+                        </TouchableOpacity>
+                        {item.quantity > 0 && (
+                          <TouchableOpacity
+                            onPress={() => addOrIncrementCart(item, QTY_STEP)}
+                            className="mt-2 bg-amber-50 border border-amber-200 py-2 rounded-xl items-center"
+                            activeOpacity={0.7}
+                          >
+                            <Text className="text-amber-900 font-bold text-sm">+ ½</Text>
+                          </TouchableOpacity>
                         )}
-                        <View className="bg-red-100 p-4 rounded-full mb-3">
-                          <Icon name={item.icon} size={28} color="#DC2626" />
-                        </View>
-                        <Text className="font-bold text-center text-base text-gray-800 mb-1" numberOfLines={2}>{item.name}</Text>
-                        <Text className="text-gray-500 text-xs text-center mb-3" numberOfLines={1}>{item.description}</Text>
-                        <View className="bg-green-50 px-3 py-1 rounded-full">
-                          <Text className="text-green-600 font-bold text-lg">₱{item.price}</Text>
-                        </View>
-                        {item.quantity <= 10 && item.quantity > 0 && (
-                          <View className="flex-row items-center mt-2">
-                            <Icon name="warning" size={12} color="#F59E0B" />
-                            <Text className="text-orange-500 text-xs ml-1">Only {item.quantity} left!</Text>
-                          </View>
-                        )}
-                      </TouchableOpacity>
+                      </View>
                     )}
                   />
                 </View>

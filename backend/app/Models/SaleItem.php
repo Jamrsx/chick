@@ -17,6 +17,10 @@ class SaleItem extends Model
         'total',
     ];
 
+    protected $casts = [
+        'quantity' => 'decimal:2',
+    ];
+
     public function sale()
     {
         return $this->belongsTo(Sale::class);

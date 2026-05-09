@@ -251,7 +251,15 @@ const DashboardScreen = () => {
   };
 
   const getTotalStock = () => {
-    return stockData.reduce((sum, item) => sum + item.quantity, 0);
+    return stockData.reduce((sum, item) => sum + Number(item.quantity), 0);
+  };
+
+  /** Returns e.g. "7.5" → "7 ½"  or  "8" → "8" */
+  const formatStockQty = (qty: number): { whole: string; hasHalf: boolean } => {
+    const n = Math.round(Number(qty) * 2) / 2;
+    const whole = Math.floor(n);
+    const hasHalf = Math.abs(n - whole - 0.5) < 0.001;
+    return { whole: String(whole), hasHalf };
   };
 
   const getLowStockCount = () => {
@@ -393,10 +401,16 @@ const DashboardScreen = () => {
               icon="restaurant-menu" 
               color="bg-red-500"
             />
-            <StatCard 
-              title="Total Stock" 
-              value={getTotalStock()} 
-              icon="kitchen" 
+            <StatCard
+              title={(() => {
+                const { whole, hasHalf } = formatStockQty(getTotalStock());
+                return hasHalf ? `${whole} ½ stock\navailable` : 'Total Stock';
+              })()}
+              value={(() => {
+                const { whole, hasHalf } = formatStockQty(getTotalStock());
+                return hasHalf ? `${whole}.5` : whole;
+              })()}
+              icon="kitchen"
               color="bg-green-500"
             />
             <StatCard 
@@ -451,7 +465,21 @@ const DashboardScreen = () => {
               <View className="flex-row justify-between items-center pt-3 border-t border-gray-100">
                 <View className="flex-1 items-center">
                   <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-1">Quantity</Text>
-                  <Text className="text-2xl font-bold text-gray-800" numberOfLines={1}>{item.quantity}</Text>
+                  {(() => {
+                    const { whole, hasHalf } = formatStockQty(item.quantity);
+                    return (
+                      <View className="items-center">
+                        <Text className="text-2xl font-bold text-gray-800">
+                          {hasHalf ? `${whole}.5` : whole}
+                        </Text>
+                        {hasHalf && (
+                          <View className="bg-amber-100 px-2 py-0.5 rounded-full mt-1">
+                            <Text className="text-amber-800 text-[10px] font-bold">{whole} ½ stock available</Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })()}
                 </View>
                 <View className="flex-1 items-center">
                   <Text className="text-gray-500 text-xs font-semibold uppercase tracking-wider mb-1">Price</Text>

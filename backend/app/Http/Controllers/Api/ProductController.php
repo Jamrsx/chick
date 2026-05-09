@@ -163,6 +163,23 @@ class ProductController extends Controller
         return response()->json(['message' => 'Restocked successfully', 'delivery' => $delivery]);
     }
 
+    public function pendingCount(Request $request)
+    {
+        $branchId = $request->query('branch_id');
+
+        $query = ProductStockDelivery::whereNull('received_at');
+
+        if ($branchId) {
+            $query->where('branch_id', $branchId);
+        }
+
+        $count = $query->count();
+
+        \Log::info('[PRODUCT] pendingCount', ['branch_id' => $branchId, 'count' => $count]);
+
+        return response()->json(['pending_count' => $count]);
+    }
+
     public function getLowStock()
     {
         $rows = ProductStock::with('product')

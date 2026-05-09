@@ -19,6 +19,7 @@ class ProductStock extends Model
     ];
 
     protected $casts = [
+        'quantity' => 'decimal:2',
         'restocked_at' => 'datetime',
         'received' => 'boolean',
     ];

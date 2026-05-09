@@ -27,11 +27,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/branches/{id}/attendance', [BranchController::class, 'getAttendance']);
     Route::get('/branches/{id}/dashboard', [BranchController::class, 'getDashboardData']);
     
-    // Products
+    // Products  — named routes MUST come before apiResource to avoid {id} catching them
+    Route::get('/products/low-stock/all', [ProductController::class, 'getLowStock']);
+    Route::get('/products/restock/pending-count', [ProductController::class, 'pendingCount']);
     Route::apiResource('products', ProductController::class);
     Route::post('/products/{id}/restock', [ProductController::class, 'restock']);
     Route::post('/products/{id}/toggle-received', [ProductController::class, 'toggleReceived']);
-    Route::get('/products/low-stock/all', [ProductController::class, 'getLowStock']);
     
     // Staff
     Route::apiResource('staff', StaffController::class);

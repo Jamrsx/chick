@@ -12,7 +12,7 @@ return new class extends Migration
             $table->id();
             $table->foreignId('product_id')->constrained()->onDelete('cascade');
             $table->foreignId('branch_id')->constrained()->onDelete('cascade');
-            $table->integer('quantity')->default(0);
+            $table->decimal('quantity', 10, 2)->default(0);
             $table->integer('minimum_stock')->default(0);
             $table->timestamps();
             
