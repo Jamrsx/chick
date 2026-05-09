@@ -166,14 +166,21 @@ function Dashboard() {
   const handleOpen = () => setIsModalOpen(true);
   const handleClose = () => setIsModalOpen(false);
 
+  /** API may send quantity as string; using + with strings concatenates ("93" + "96" → "9396"). */
+  const parseQuantity = (value) => {
+    if (value === null || value === undefined || value === "") return 0;
+    const n = typeof value === "string" ? parseFloat(value.replace(/,/g, "")) : Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const getBranchProductsCount = (branchId) => {
-    return products.reduce((sum, product) => {
+    const target = String(branchId);
+    const total = products.reduce((sum, product) => {
       if (!product.product_stocks) return sum;
-      const stock = product.product_stocks.find(
-        (s) => s.branch_id === branchId
-      );
-      return sum + (stock ? stock.quantity : 0);
+      const stock = product.product_stocks.find((s) => String(s.branch_id) === target);
+      return sum + parseQuantity(stock?.quantity);
     }, 0);
+    return Math.round(total);
   };
 
   const getBranchStaffCount = (branchId) => {

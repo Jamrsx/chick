@@ -68,14 +68,18 @@ class BranchController extends Controller
             ->where('branch_id', $id);
 
         if ($request->has('date')) {
-            $query->whereDate('sale_date', $request->date);
+            $date = $request->date;
+            $query->where(function ($q) use ($date) {
+                $q->whereDate('sale_date', $date)
+                  ->orWhereRaw("DATE(CONVERT_TZ(sales.created_at, '+00:00', '+08:00')) = ?", [$date]);
+            });
         }
 
         if ($request->has('start_date') && $request->has('end_date')) {
             $query->whereBetween('sale_date', [$request->start_date, $request->end_date]);
         }
 
-        $sales = $query->orderBy('sale_date', 'desc')->get();
+        $sales = $query->orderBy('created_at', 'desc')->get();
 
         return response()->json($sales);
     }

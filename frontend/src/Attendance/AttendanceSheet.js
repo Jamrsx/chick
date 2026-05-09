@@ -128,23 +128,41 @@ function AttendanceAdmin() {
     return () => clearInterval(timer);
   }, []);
 
-  // Helper function to extract time from ISO string or time string
+  // Helper: extract clock time directly from backend value (no timezone conversion).
   const extractTimeFromISO = (timeValue) => {
     if (!timeValue) return null;
     
     try {
-      // If it's a full ISO string like "2026-04-25T01:43:00.000000Z"
-      if (typeof timeValue === 'string' && timeValue.includes('T')) {
-        const date = new Date(timeValue);
-        const hours = date.getUTCHours();
-        const minutes = date.getUTCMinutes();
-        return { hours, minutes };
+      if (typeof timeValue === 'string') {
+        const raw = timeValue.trim();
+
+        // ISO / datetime string: keep the literal clock portion after T or space.
+        // Examples:
+        //  - 2026-05-10T06:58:49+08:00
+        //  - 2026-05-10T06:58:49.000000Z
+        //  - 2026-05-10 06:58:49
+        const dateTimeMatch = raw.match(/[T\s](\d{2}):(\d{2})(?::\d{2})?/);
+        if (dateTimeMatch) {
+          return {
+            hours: parseInt(dateTimeMatch[1], 10),
+            minutes: parseInt(dateTimeMatch[2], 10),
+          };
+        }
+
+        // Plain time string: "06:58:49" or "06:58"
+        const timeOnlyMatch = raw.match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+        if (timeOnlyMatch) {
+          return {
+            hours: parseInt(timeOnlyMatch[1], 10),
+            minutes: parseInt(timeOnlyMatch[2], 10),
+          };
+        }
       }
-      
-      // If it's just time string like "01:43:00" or "01:43"
-      if (typeof timeValue === 'string' && timeValue.match(/^\d{2}:\d{2}/)) {
-        const [hours, minutes] = timeValue.split(':');
-        return { hours: parseInt(hours), minutes: parseInt(minutes) };
+
+      // Fallback for unexpected non-string values.
+      const date = new Date(timeValue);
+      if (!Number.isNaN(date.getTime())) {
+        return { hours: date.getHours(), minutes: date.getMinutes() };
       }
       
       return null;

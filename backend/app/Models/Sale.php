@@ -26,7 +26,10 @@ class Sale extends Model
     ];
 
     protected $casts = [
-        'sale_date' => 'date',
+        // Keep sale_date as a plain string. Casting it as 'date' makes Laravel
+        // serialize it as a timezone-shifted ISO datetime (Manila midnight -> UTC),
+        // which causes the frontend to display the previous calendar day.
+        'sale_date' => 'string',
     ];
 
     public function branch()

@@ -20,7 +20,13 @@ class SaleController extends Controller
         }
 
         if ($request->has('date')) {
-            $query->whereDate('sale_date', $request->date);
+            $date = $request->date;
+            // Backward compatibility for rows saved before PH business-date fix:
+            // include rows whose created_at maps to this PH date.
+            $query->where(function ($q) use ($date) {
+                $q->whereDate('sale_date', $date)
+                    ->orWhereRaw("DATE(CONVERT_TZ(created_at, '+00:00', '+08:00')) = ?", [$date]);
+            });
         }
 
         if ($request->has('start_date') && $request->has('end_date')) {
@@ -53,7 +59,10 @@ class SaleController extends Controller
         $branchId = $validated['branch_id'] ?? null;
 
         $salesQuery = DB::table('sales')
-            ->whereDate('sale_date', $date);
+            ->where(function ($q) use ($date) {
+                $q->whereDate('sales.sale_date', $date)
+                    ->orWhereRaw("DATE(CONVERT_TZ(sales.created_at, '+00:00', '+08:00')) = ?", [$date]);
+            });
 
         if ($branchId) {
             $salesQuery->where('branch_id', $branchId);
@@ -99,7 +108,10 @@ class SaleController extends Controller
         // Per-staff aggregates
         $staffAgg = DB::table('sales')
             ->leftJoin('sale_items', 'sales.id', '=', 'sale_items.sale_id')
-            ->whereDate('sales.sale_date', $date)
+            ->where(function ($q) use ($date) {
+                $q->whereDate('sales.sale_date', $date)
+                    ->orWhereRaw("DATE(CONVERT_TZ(sales.created_at, '+00:00', '+08:00')) = ?", [$date]);
+            })
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
             ->select(
                 'sales.user_id',
@@ -119,7 +131,10 @@ class SaleController extends Controller
         $topProducts = DB::table('sale_items')
             ->join('sales', 'sale_items.sale_id', '=', 'sales.id')
             ->join('products', 'sale_items.product_id', '=', 'products.id')
-            ->whereDate('sales.sale_date', $date)
+            ->where(function ($q) use ($date) {
+                $q->whereDate('sales.sale_date', $date)
+                    ->orWhereRaw("DATE(CONVERT_TZ(sales.created_at, '+00:00', '+08:00')) = ?", [$date]);
+            })
             ->when($branchId, fn ($q) => $q->where('sales.branch_id', $branchId))
             ->select(
                 'sales.user_id',
@@ -214,13 +229,21 @@ class SaleController extends Controller
             $change = $validated['cash_collected'] - $total;
             $invoiceNumber = 'INV-' . date('Ymd') . '-' . str_pad(Sale::count() + 1, 4, '0', STR_PAD_LEFT);
 
+            // DATE column must follow business calendar (Philippines). App timezone is UTC, so `now()`
+            // alone stores the UTC calendar day — POS/dashboard use local PH dates and miss sales (e.g. sale at 2am PH → UTC still "yesterday").
+            $saleDatePh = now()->timezone('Asia/Manila')->toDateString();
+            \Log::info('[SALE STORE] business date resolution', [
+                'app_now' => now()->toDateTimeString(),
+                'sale_date_ph' => $saleDatePh,
+            ]);
+
             $sale = Sale::create([
                 'invoice_number' => $invoiceNumber,
                 'branch_id' => $validated['branch_id'],
                 'user_id' => $validated['user_id'],
                 'customer_name' => $validated['customer_name'] ?? null,
                 'senior_discount' => $isSenior,
-                'sale_date' => now(),
+                'sale_date' => $saleDatePh,
                 'subtotal' => $subtotal,
                 'tax' => $tax,
                 'discount_amount' => $discountAmount,

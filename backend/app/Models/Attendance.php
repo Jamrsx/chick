@@ -27,8 +27,12 @@ class Attendance extends Model
 
     protected $casts = [
         'date' => 'date',
-        'time_in' => 'datetime',
-        'time_out' => 'datetime',
+        // time_in / time_out are stored as plain TIME strings (HH:mm:ss).
+        // Casting them as 'datetime' causes Laravel to apply timezone conversion
+        // and serialize them as UTC ISO strings, shifting the displayed clock.
+        // Keep them as strings so the frontend receives the raw DB value.
+        'time_in' => 'string',
+        'time_out' => 'string',
     ];
 
     public function user()

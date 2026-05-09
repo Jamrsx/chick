@@ -161,11 +161,8 @@ function BranchDetails() {
     loadBranchDetails();
   }, [id, selectedDate]);
 
-  // Filter sales by selected date
-  const filteredSales = useMemo(() => {
-    if (!selectedDate) return sales;
-    return sales.filter(sale => sale.date === selectedDate);
-  }, [sales, selectedDate]);
+  // Sales are already filtered by date by the API — no need to re-filter on the frontend.
+  const filteredSales = useMemo(() => sales, [sales]);
 
   // Filter attendance by search term
   const filteredAttendance = useMemo(() => {
