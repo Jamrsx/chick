@@ -17,6 +17,34 @@ import { getCache, setCache, invalidateCache } from "../utils/cache";
 
 const { Option } = Select;
 
+/**
+ * API sends ISO-8601 in UTC (`...Z`). `toLocaleString` without `timeZone` converts to the
+ * browser zone (e.g. Manila), so 06:51Z becomes 2:51 PM — correct local time, but different
+ * clock digits than MySQL/phpMyAdmin when those show the UTC column. Use UTC here so the
+ * displayed clock matches that stored UTC instant.
+ */
+function formatRestockedAtUtcClock(value) {
+  if (value == null || value === "") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    console.warn("[ProductList] invalid restocked_at", value);
+    return null;
+  }
+  if (process.env.NODE_ENV === "development") {
+    console.log("[ProductList] restocked_at (UTC clock)", value, "→", d.toISOString());
+  }
+  return d.toLocaleString("en-PH", {
+    timeZone: "UTC",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  });
+}
+
 function ProductList() {
   const [products, setProducts] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -257,9 +285,9 @@ function ProductList() {
         if (!delivery.received_at) current.pendingQty += qty;
 
         if (delivery.restocked_at) {
-          const currentDate = current.lastRestockedAt ? new Date(current.lastRestockedAt) : null;
-          const candidateDate = new Date(delivery.restocked_at);
-          if (!currentDate || candidateDate > currentDate) {
+          const prevMs = current.lastRestockedAt ? new Date(current.lastRestockedAt).getTime() : NaN;
+          const nextMs = new Date(delivery.restocked_at).getTime();
+          if (!Number.isNaN(nextMs) && (Number.isNaN(prevMs) || nextMs > prevMs)) {
             current.lastRestockedAt = delivery.restocked_at;
           }
         }
@@ -539,14 +567,7 @@ function ProductList() {
                                     <td className="px-6 py-4">
                                       {stock.lastRestockedAt ? (
                                         <div className="text-xs text-gray-600">
-                                          {new Date(stock.lastRestockedAt).toLocaleString('en-PH', {
-                                            year: 'numeric',
-                                            month: 'short',
-                                            day: 'numeric',
-                                            hour: '2-digit',
-                                            minute: '2-digit',
-                                            hour12: true
-                                          })}
+                                          {formatRestockedAtUtcClock(stock.lastRestockedAt)}
                                         </div>
                                       ) : (
                                         <span className="text-xs text-gray-400">Never restocked</span>
