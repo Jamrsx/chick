@@ -178,13 +178,23 @@ function BranchDetails() {
     return filteredAttendance.filter(isPresentForDay);
   }, [filteredAttendance]);
 
+  /** API may return quantity as string; + with string concatenates (0 + "1.00" → "01.00"). */
+  const parseQuantity = (value) => {
+    if (value === null || value === undefined || value === "") return 0;
+    const n = typeof value === "string" ? parseFloat(value.replace(/,/g, "")) : Number(value);
+    return Number.isFinite(n) ? n : 0;
+  };
+
   const totalSales = useMemo(
-    () => filteredSales.reduce((sum, item) => sum + parseFloat(item.total || 0), 0),
+    () => filteredSales.reduce((sum, item) => {
+      const t = parseFloat(String(item.total ?? "").replace(/,/g, "")) || 0;
+      return sum + (Number.isFinite(t) ? t : 0);
+    }, 0),
     [filteredSales]
   );
 
   const totalItems = useMemo(
-    () => filteredSales.reduce((sum, item) => sum + (item.quantity || 0), 0),
+    () => filteredSales.reduce((sum, item) => sum + parseQuantity(item.quantity), 0),
     [filteredSales]
   );
 

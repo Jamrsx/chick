@@ -5,7 +5,6 @@ import {
   ShoppingOutlined, 
   DeleteOutlined,
   BoxPlotOutlined,
-  StockOutlined,
   BranchesOutlined,
   SearchOutlined,
   ReloadOutlined
@@ -311,11 +310,17 @@ function ProductList() {
 
   // Calculate statistics
   const totalProducts = products.length;
+  const parseProductPrice = (p) => {
+    const n = Number(p?.price);
+    return Number.isFinite(n) ? n : NaN;
+  };
   const totalStockValue = products.reduce((sum, product) => {
-    return sum + (getTotalStock(product) * product.price);
+    const price = parseProductPrice(product);
+    const qty = getTotalStock(product);
+    return sum + (Number.isFinite(price) ? qty * price : 0);
   }, 0);
-  const lowStockProducts = products.filter(product => getTotalStock(product) < 20).length;
-  const avgPrice = totalProducts > 0 ? products.reduce((sum, p) => sum + p.price, 0) / totalProducts : 0;
+  const validPrices = products.map(parseProductPrice).filter((n) => Number.isFinite(n));
+  const avgPrice = validPrices.length > 0 ? validPrices.reduce((a, b) => a + b, 0) / validPrices.length : 0;
 
   const formatCurrency = (amount) => {
     return `₱${amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}`;
@@ -346,7 +351,7 @@ function ProductList() {
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         <div className="max-w-7xl mx-auto px-6 py-6">
           {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div className="bg-white rounded-lg border border-gray-200 p-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -377,17 +382,6 @@ function ProductList() {
                 </div>
                 <div className="bg-orange-100 rounded-full p-3">
                   <BoxPlotOutlined className="text-xl text-orange-600" />
-                </div>
-              </div>
-            </div>
-            <div className="bg-white rounded-lg border border-gray-200 p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide">Low Stock Items</p>
-                  <p className="text-2xl font-bold text-red-600">{lowStockProducts}</p>
-                </div>
-                <div className="bg-red-100 rounded-full p-3">
-                  <StockOutlined className="text-xl text-red-600" />
                 </div>
               </div>
             </div>
