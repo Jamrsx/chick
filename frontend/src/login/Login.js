@@ -63,12 +63,12 @@ function Login() {
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-600 to-purple-600 p-6 text-white text-center">
-          <div className="mb-3">
-            <div className="inline-flex items-center justify-center w-16 h-16 bg-white/20 rounded-full">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
-              </svg>
-            </div>
+          <div className="mb-4 flex justify-center">
+            <img
+              src="/logooos.jpg"
+              alt="New Moon Lechon Manok & Liempo"
+              className="w-24 h-24 rounded-2xl object-cover shadow-lg ring-2 ring-white/30"
+            />
           </div>
           <h2 className="text-2xl font-bold">Welcome Back</h2>
           <p className="text-blue-100 mt-2">Sign in to your account</p>

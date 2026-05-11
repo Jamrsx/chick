@@ -184,7 +184,7 @@ function MenuSidebar() {
             } rounded-full flex items-center justify-center shadow-lg transition-all duration-300 overflow-hidden bg-gradient-to-r from-blue-500 to-indigo-600`}>
               {!logoError ? (
                 <img 
-                  src="/lechon-manok.png" 
+                  src="/logooos.jpg" 
                   alt="Lechon Manok Logo" 
                   className="w-full h-full object-cover rounded-full"
                   onError={() => setLogoError(true)}

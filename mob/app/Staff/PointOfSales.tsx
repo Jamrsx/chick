@@ -334,14 +334,19 @@ export default function POSScreen() {
           description: `Stock: ${quantity}`,
           popular: quantity > 20,
           branchStock: branchStock,
-          ongoing_stocks: item.ongoing_stocks || [],
+          // IMPORTANT: Only include deliveries for the logged-in branch.
+          ongoing_stocks: deliveriesForBranch,
           pendingQty,
           lastDeliveryAt,
         };
       });
       
-      // Show all stocks (both received and not received)
-      setOngoingStocks(productsWithDetails);
+      // Only show products that have deliveries for this branch at all.
+      // (Prevents Opol seeing CDO deliveries and vice-versa.)
+      const onlyBranchOngoing = productsWithDetails.filter((p: any) => (p.ongoing_stocks || []).length > 0);
+
+      // Show all branch stocks (both received and not received)
+      setOngoingStocks(onlyBranchOngoing);
       setOngoingStocksModalVisible(true);
     } catch (error) {
       console.error('Error loading ongoing stocks:', error);
